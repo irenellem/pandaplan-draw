@@ -4,7 +4,7 @@ import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
 import { MoveSelect, SavedWorkPanel, saveStatusText, when, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
-import { newSpare, nextSlot, type Slot } from './lib/editorSlot';
+import { nextSlot, type Slot } from './lib/editorSlot';
 import { beginOpen } from './lib/perf';
 import { prefetchDrawio, warmupAllowed, whenIdle } from './lib/warmup';
 import { downloadText, titleFilename } from './lib/download';
@@ -59,7 +59,7 @@ export function App() {
   const setOpen = (o: Open | null) => {
     openRef.current = o;
     setOpenState(o);
-    setSlot((s) => nextSlot(s, o));
+    setSlot((s) => nextSlot(s, o !== null));
   };
 
   const fail = (what: string, e?: unknown) =>
@@ -101,7 +101,7 @@ export function App() {
   }, [listShown, mount.status, open]);
   useEffect(() => {
     if (!listShown || mount.status !== 'mounted' || open || slot || !warmupAllowed()) return;
-    return whenIdle(() => setSlot((s) => (s || openRef.current ? s : newSpare())));
+    return whenIdle(() => setSlot((s) => (s || openRef.current ? s : nextSlot(s, true))));
   }, [listShown, mount.status, open, slot]);
 
   // Light / Dark are fixed; System follows the OS, live.
@@ -575,12 +575,13 @@ export function App() {
 
   // The frame is rendered on its own, beside the overlays, so a spare survives the empty state being
   // replaced by an open file (same key = same iframe, no reload).
-  const frameFile = open && slot?.token === open.token ? { token: open.token, name: titleOf(open), xml: open.xml } : null;
+  const frameFile = open ? { token: open.token, name: titleOf(open), xml: open.xml } : null;
   const frame =
-    mount.status === 'mounted' && slot && (slot.token === null || frameFile) ? (
+    mount.status === 'mounted' && slot ? (
       <DrawioEditor
         key={slot.key}
         file={frameFile}
+        waiting={null}
         linkRef={linkRef}
         onChange={onChange}
         onExit={() => {

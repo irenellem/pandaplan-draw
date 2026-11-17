@@ -38,7 +38,7 @@ export async function probeDrawio(): Promise<Probe> {
 export interface DrawioHandlers {
   /**
    * Return the XML to load, or null to defer: a warm spare frame boots with no file yet and gets its
-   * one `load` later through `link.load()`. Either way a frame is sent `load` at most once.
+   * first `load` later through `link.load()`.
    */
   onInit(): string | null;
   /** draw.io's `load` event (proto=json): the diagram is on the canvas and the editor is usable. */
@@ -53,18 +53,35 @@ export interface DrawioLink {
   send(msg: Record<string, unknown>): void;
   /** Ask draw.io for an SVG data URI of the current diagram (used for host-side Print / PDF). */
   exportSvg(timeoutMs?: number): Promise<string>;
-  /** Send the deferred `load` (see `onInit`). False if draw.io has not sent `init` yet, or a load was already sent. */
+  /**
+   * Load a diagram: the first one into a spare, or the next one into a frame that already shows a
+   * file (one frame serves every file of the page). False if draw.io has not sent `init` yet.
+   */
   load(xml: string): boolean;
   /** draw.io sent `init`. */
   readonly ready: boolean;
-  /** `load` has been sent to this frame. */
+  /** At least one `load` has been sent to this frame. */
   readonly loadSent: boolean;
+  /** A `load` was sent and draw.io has not answered it yet: `autosave` / `save` are being dropped. */
+  readonly fenced: boolean;
   dispose(): void;
 }
 
+/** If draw.io never answers a `load`, stop dropping its messages after this long (never lose edits silently). */
+export const FENCE_MAX_MS = 10000;
+
+/**
+ * The fence. draw.io posts `autosave` synchronously on every model change, and window→window
+ * messages arrive in the order they were posted. So between our `load` and draw.io's `load` reply,
+ * any `autosave` / `save` either belongs to the diagram being replaced or is the new one being set
+ * up: neither may be stored as the new file. They are dropped; the replaced file's last edits were
+ * already received (they were posted when made) and are flushed by the app before it switches.
+ */
 export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): DrawioLink {
   let ready = false;
   let loadSent = false;
+  let unanswered = 0;
+  let fenceTimer: ReturnType<typeof setTimeout> | undefined;
   const waiters: Array<(data: string | null) => void> = [];
 
   const send = (msg: Record<string, unknown>) => {
@@ -74,6 +91,9 @@ export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): Draw
   // autosave:1 turns on `autosave` events without changing the iframe URL.
   const doLoad = (xml: string) => {
     loadSent = true;
+    unanswered++;
+    clearTimeout(fenceTimer);
+    fenceTimer = setTimeout(() => (unanswered = 0), FENCE_MAX_MS);
     send({ action: 'load', xml, autosave: 1, title: h.title?.() ?? '' });
   };
 
@@ -97,13 +117,14 @@ export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): Draw
         break;
       }
       case 'load':
+        if (unanswered > 0 && --unanswered === 0) clearTimeout(fenceTimer);
         h.onLoaded?.();
         break;
       case 'autosave':
-        if (typeof msg.xml === 'string') h.onAutosave(msg.xml);
+        if (typeof msg.xml === 'string' && unanswered === 0) h.onAutosave(msg.xml);
         break;
       case 'save':
-        if (typeof msg.xml === 'string') h.onSave(msg.xml);
+        if (typeof msg.xml === 'string' && unanswered === 0) h.onSave(msg.xml);
         break;
       case 'exit':
         h.onExit();
@@ -123,8 +144,11 @@ export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): Draw
     get loadSent() {
       return loadSent;
     },
+    get fenced() {
+      return unanswered > 0;
+    },
     load(xml: string) {
-      if (!ready || loadSent) return false;
+      if (!ready) return false;
       doLoad(xml);
       return true;
     },
@@ -141,6 +165,7 @@ export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): Draw
       });
     },
     dispose() {
+      clearTimeout(fenceTimer);
       window.removeEventListener('message', onMessage);
       waiters.splice(0).forEach((w) => w(null));
     },

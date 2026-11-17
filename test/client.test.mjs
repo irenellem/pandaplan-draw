@@ -18,7 +18,7 @@ await build({
       export { slugify, makeFile } from './src/lib/drawioFile';
       export { titleFilename } from './src/lib/download';
       export { runSelfTest } from './src/lib/selftest';
-      export { nextSlot, newSpare } from './src/lib/editorSlot';
+      export { nextSlot, newSlot } from './src/lib/editorSlot';
       export { connectDrawio } from './src/lib/drawioProtocol';
       export { prefetchUrls, warmupAllowed } from './src/lib/warmup';
       export { SavedWorkPanel } from './src/components/SavedWorkPanel';
@@ -133,17 +133,13 @@ test('?selftest=1 diagnostics are all ok and JSON-serialisable', () => {
   assert.ok('timings' in r && 'shell' in r.timings && 'lastOpen' in r.timings);
 });
 
-test('editor frames: a spare is adopted once, a frame never changes file', () => {
-  const spare = m.newSpare();
-  const a = m.nextSlot(spare, { token: 1 });
-  assert.deepEqual(a, { key: spare.key, token: 1 }, 'first open adopts the spare (same key = same iframe)');
-  assert.equal(m.nextSlot(a, { token: 1 }), a, 'rename/move of the open file keeps its frame');
-  const b = m.nextSlot(a, { token: 2 });
-  assert.notEqual(b.key, a.key, 'switching file A → B gets a new frame, never reuses A\'s');
-  assert.equal(b.token, 2);
-  assert.equal(m.nextSlot(b, null), null, 'closing drops that file\'s frame');
-  assert.equal(m.nextSlot(spare, null), spare, 'a spare survives with nothing open');
-  assert.equal(m.nextSlot(null, { token: 3 }).token, 3, 'no spare: a fresh frame, as before');
+test('editor frames: one frame for the page, kept across files', () => {
+  assert.equal(m.nextSlot(null, false), null, 'nothing open and no warm-up: no frame');
+  const s = m.nextSlot(null, true);
+  assert.ok(s && typeof s.key === 'number', 'a file or a warm-up creates the frame');
+  assert.equal(m.nextSlot(s, true), s, 'the next file reuses it (same key = same iframe, no reload)');
+  assert.equal(m.nextSlot(s, false), s, 'closing a file keeps the warm frame');
+  assert.notEqual(m.newSlot().key, s.key, 'a replacement frame gets a new key');
 });
 
 test('draw.io protocol: a spare defers its single load until a file is assigned', () => {
@@ -170,12 +166,17 @@ test('draw.io protocol: a spare defers its single load until a file is assigned'
     assert.deepEqual(sent, [], 'a spare sends nothing at init');
     file = '<mxfile/>';
     assert.equal(link.load(file), true);
-    assert.equal(link.load('<again/>'), false, 'a frame gets one load only');
-    assert.deepEqual(sent, [{ action: 'load', xml: '<mxfile/>', autosave: 1, title: 'T' }]);
+    assert.equal(link.fenced, true, 'between a load and its answer, autosave/save are dropped');
+    assert.equal(link.load('<again/>'), true, 'the same frame takes the next file');
+    assert.deepEqual(sent.map((x) => x.xml), ['<mxfile/>', '<again/>']);
+    assert.equal(sent[0].title, 'T');
     post({ event: 'load' }, {}); // wrong source: ignored
     assert.equal(loaded, 0);
     post({ event: 'load' });
-    assert.equal(loaded, 1, 'draw.io\'s load event = editor usable');
+    assert.equal(loaded, 1, "draw.io's load event = editor usable");
+    assert.equal(link.fenced, true, 'one load still unanswered: the gate stays shut');
+    post({ event: 'load' });
+    assert.equal(link.fenced, false, 'the answer to the last load reopens the gate');
     link.dispose();
 
     // A fresh frame (file known at init) still loads straight away, as before.
