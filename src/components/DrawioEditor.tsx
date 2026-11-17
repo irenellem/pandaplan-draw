@@ -148,7 +148,12 @@ export function DrawioEditor({ file, waiting, onChange, onExit, onTimeout, linkR
   const idle = file === null && waiting === null;
 
   return (
-    <div className={`sw-frame-wrap${idle ? ' spare' : ''}`} aria-hidden={idle ? true : undefined} data-shown={shownToken ?? ''}>
+    <div
+      className={`sw-frame-wrap${idle ? ' spare' : ''}`}
+      aria-hidden={idle ? true : undefined}
+      {...(idle ? { inert: '' } : {})}
+      data-shown={shownToken ?? ''}
+    >
       {covering &&
         (warm ? (
           <div className="sw-veil" role="status" aria-live="polite">

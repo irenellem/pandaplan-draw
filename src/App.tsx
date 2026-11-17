@@ -83,6 +83,19 @@ export function App() {
     else window.history.replaceState({}, '', '/');
   }, [loading, entries.length]);
 
+  // Escape closes the drawer and returns focus to the button that opened it.
+  useEffect(() => {
+    if (!drawer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setDrawer(false);
+      (document.querySelector('.sw-files') as HTMLButtonElement | null)?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawer]);
+
   // Back / Forward move the screen, in both directions.
   useEffect(() => {
     const onPop = () => {
@@ -659,6 +672,16 @@ export function App() {
   return (
     <>
       <div className={`sw-app${open ? ' has-open' : ''}${open && drawer ? ' panel-open' : ''}`} data-app="pandaplan-draw">
+        {open && drawer && (
+          <div
+            className="sw-scrim"
+            aria-hidden="true"
+            onClick={() => {
+              setDrawer(false);
+              (document.querySelector('.sw-files') as HTMLButtonElement | null)?.focus();
+            }}
+          />
+        )}
         <SavedWorkPanel
           entries={entries}
           loading={loading}
