@@ -10,7 +10,7 @@ export interface Toast {
 }
 
 export type Editing = { type: 'node' | 'edge'; id: string } | null;
-export type ModalId = 'shortcuts' | 'import-report' | null;
+export type ModalId = 'shortcuts' | 'import-report' | 'backup' | null;
 
 interface SessionState {
   selectedNodes: string[];

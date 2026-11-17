@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useSession } from '../store/sessionStore';
+import { BackupPanel } from './BackupPanel';
 
 const SHORTCUTS: [string, string][] = [
   ['Space + drag / middle-drag', 'Pan'],
@@ -42,7 +43,8 @@ export function Modals() {
   }, [modal]);
 
   if (!modal) return null;
-  const title = modal === 'shortcuts' ? 'Keyboard shortcuts' : 'Import complete';
+  const title =
+    modal === 'shortcuts' ? 'Keyboard shortcuts' : modal === 'backup' ? 'Cloud backup' : 'Import complete';
 
   return (
     <div className="scrim" onClick={close}>
@@ -77,6 +79,7 @@ export function Modals() {
               ))}
             </div>
           )}
+          {modal === 'backup' && <BackupPanel />}
           {modal === 'import-report' && report && (
             <>
               <dl className="kv">

@@ -1,4 +1,5 @@
 import {
+  CloudUpload,
   Download,
   FileJson,
   Grid3x3,
@@ -227,6 +228,15 @@ export function TopBar() {
         <Grid3x3 size={16} />
       </button>
       <span className="sep" />
+
+      <button
+        type="button"
+        className="btn sm"
+        title="Back up to the cloud (Cloudflare) and restore snapshots"
+        onClick={() => useSession.getState().openModal('backup')}
+      >
+        <CloudUpload size={14} /> Backup
+      </button>
 
       <div style={{ position: 'relative' }} ref={exportRef}>
         <button type="button" className="btn sm" aria-haspopup="menu" aria-expanded={exportOpen} onClick={() => setExportOpen((o) => !o)}>
