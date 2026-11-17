@@ -5,7 +5,7 @@ import { SavedWorkPanel, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
 import { downloadText } from './lib/download';
-import { listEntries, readXml, saveXml, tombstone, uniqueSlug, type Entry, type Source } from './lib/savedWork';
+import { deleteEntry, listEntries, readXml, saveXml, tombstone, uniqueSlug, type Entry, type Source } from './lib/savedWork';
 
 const AUTOSAVE_MS = 2000;
 
@@ -244,17 +244,24 @@ export function App() {
 
   const remove = (e: Entry): boolean => {
     const ok = window.confirm(
-      `Delete "${e.name}"?\n\nIt is hidden in this browser now. The cloud copy stays in storage until a delete route is added to the backup service.`,
+      `Delete "${e.name}"?\n\nThis deletes every saved version of it from cloud storage. It cannot be undone.`,
     );
     if (!ok) return false;
-    tombstone(e.id);
-    setEntries((list) => list.filter((x) => x.id !== e.id));
-    entriesRef.current = entriesRef.current.filter((x) => x.id !== e.id);
+    // Close it first: an open file keeps autosaving, and a save landing after the delete would
+    // put the diagram straight back in the list.
     if (openRef.current?.id === e.id) {
       window.clearTimeout(timer.current);
       latestXml.current = savedXml.current = '';
       setOpen(null);
       setSave({ state: 'idle' });
+    }
+    tombstone(e.id);
+    setEntries((list) => list.filter((x) => x.id !== e.id));
+    entriesRef.current = entriesRef.current.filter((x) => x.id !== e.id);
+    if (e.source === 'cloud') {
+      void deleteEntry(e.id).catch((err) =>
+        fail(`"${e.name}" is hidden here, but the cloud copy could not be deleted`, err),
+      );
     }
     return true;
   };

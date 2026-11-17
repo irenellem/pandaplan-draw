@@ -151,6 +151,17 @@ export interface SaveResult {
   updatedAt: string;
 }
 
+/** Delete the cloud copy of a diagram. Removes every saved version of that slug, not just today's. */
+export async function deleteEntry(name: string): Promise<{ deleted: number }> {
+  const r = await fetch(`${API}/backup?name=${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: { accept: 'application/json' },
+  });
+  if (r.status === 404) return { deleted: 0 };
+  const j = await json<{ deleted?: number }>(r);
+  return { deleted: j.deleted ?? 0 };
+}
+
 /** PUT /api/draw/backup?name=<slug> with the drawio payload. `keepalive` for page-hide flushes. */
 export async function saveXml(name: string, xml: string, keepalive = false): Promise<SaveResult> {
   const file: DrawioFile = makeFile(name, xml);
