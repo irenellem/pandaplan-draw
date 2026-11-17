@@ -77,6 +77,41 @@
 .sw-src { word-break: break-all; font-size: 12px; }
 .sw-reason { color: var(--ink-3); font-size: 12px; }
 
+/* Phone-only top bar inside the editor area (see the narrow media query). */
+.sw-mobilebar { display: none; }
+
+/* Phone (390px) and small tablets: one pane at a time. The folder fills the screen until a diagram
+   is opened; then the editor fills it and the top bar leads back. */
+@media (max-width: 700px) {
+  .sw-panel { flex: 1 1 auto; width: 100%; border-right: 0; }
+  .sw-app.has-open .sw-panel { display: none; }
+  .sw-app:not(.has-open) .sw-main { display: none; }
+  .sw-keys { display: none; }
+  /* iOS zooms the whole page into any input under 16px and leaves it zoomed (sideways scrolling). */
+  .sw-search input, .sw-new input, .sw-rename { font-size: 16px; }
+  .sw-file { padding-top: 9px; padding-bottom: 9px; }
+  .sw-mobilebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 44px;
+    padding: 0 8px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    z-index: 1;
+  }
+  .sw-mobilebar .btn { flex: 0 0 auto; }
+  .sw-mobilebar-name { flex: 0 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw-mobilebar-status { flex: 1 1 0; min-width: 0; text-align: right; font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw-mobilebar-status.err { color: var(--danger); white-space: normal; line-height: 1.2; max-height: 40px; }
+  .sw-app.has-open .sw-frame { top: 44px; height: auto; }
+  .sw-app.has-open .sw-empty-main, .sw-app.has-open .sw-placeholder { padding-top: 60px; }
+}
+
 .spin { animation: sw-spin 0.9s linear infinite; }
 @keyframes sw-spin { to { transform: rotate(360deg); } }
 

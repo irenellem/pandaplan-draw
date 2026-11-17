@@ -4,7 +4,7 @@
  * https://www.drawio.com/doc/faq/embed-mode
  */
 export const DRAWIO_PATH = '/drawio/';
-export const DRAWIO_SRC = `${DRAWIO_PATH}?embed=1&proto=json&spin=1&libraries=1&noSaveBtn=1&saveAndExit=0&noExitBtn=1`;
+export const DRAWIO_SRC = `${DRAWIO_PATH}?embed=1&proto=json&spin=1&libraries=1&noSaveBtn=1&saveAndExit=0&noExitBtn=1&v=32.6.10`;
 export const INIT_TIMEOUT_MS = 8000;
 /** Present in this app's index.html: if /drawio/ returns it, the path is an SPA fallback, not draw.io. */
 export const SHELL_MARKER = 'data-app="pandaplan-draw"';

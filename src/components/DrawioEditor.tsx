@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { connectDrawio, DRAWIO_PATH, DRAWIO_SRC, INIT_TIMEOUT_MS, type DrawioLink } from '../lib/drawioProtocol';
+import { connectDrawio, DRAWIO_SRC, INIT_TIMEOUT_MS, type DrawioLink } from '../lib/drawioProtocol';
 
 interface Props {
   name: string;
@@ -62,18 +62,15 @@ export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }
 export function EditorPlaceholder({ reason, onRetry }: { reason: string | null; onRetry(): void }) {
   return (
     <div className="sw-placeholder" role="status">
-      <h2>The draw.io editor is not available</h2>
-      <p>
-        Expected the self-hosted drawio webapp at <code>{DRAWIO_PATH}</code> on this origin, loaded as
-      </p>
-      <p>
-        <code className="sw-src">{DRAWIO_SRC}</code>
-      </p>
-      {reason && <p className="sw-reason">Reason: {reason}</p>}
-      <p>The saved-work folder on the left still works: you can see, rename and delete files.</p>
+      <h2>The drawing editor did not load</h2>
+      <p>Press “Check again”, or reload the page. If it keeps happening, tell the PandaPlan admin and quote the details below.</p>
+      <p>Your saved diagrams are safe: the saved-work folder still lists, renames and deletes them.</p>
       <button type="button" className="btn" onClick={onRetry}>
         Check again
       </button>
+      <p className="sw-reason">
+        Details for the admin: {reason ?? 'no reason given'} · expected <code className="sw-src">{DRAWIO_SRC}</code>
+      </p>
     </div>
   );
 }

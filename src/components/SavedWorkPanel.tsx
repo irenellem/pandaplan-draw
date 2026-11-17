@@ -49,6 +49,22 @@ function size(b: number): string {
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
+/** The save line, shared by the folder footer and the phone top bar. */
+export function saveStatusText(s: SaveState): string {
+  return s.state === 'pending'
+    ? 'Unsaved changes…'
+    : s.state === 'saving'
+      ? 'Saving to cloud…'
+      : s.state === 'saved'
+        ? `Saved ${s.at ? when(s.at) : ''}`
+        : s.state === 'error'
+          ? (s.error ?? 'Something went wrong.')
+          : '';
+}
+
+/** Phones have no double-click: a tap on a file opens it there. */
+const touch = () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+
 type Row = { kind: 'group'; id: GroupId; label: string; count: number } | { kind: 'file'; entry: Entry };
 
 /** Saved-work folder: a keyboard-driven tree of saved diagrams grouped by date. */
@@ -192,16 +208,7 @@ export function SavedWorkPanel(p: Props) {
     }
   };
 
-  const status =
-    p.save.state === 'pending'
-      ? 'Unsaved changes…'
-      : p.save.state === 'saving'
-        ? 'Saving to cloud…'
-        : p.save.state === 'saved'
-          ? `Saved ${p.save.at ? when(p.save.at) : ''}`
-          : p.save.state === 'error'
-            ? (p.save.error ?? 'Something went wrong.')
-            : '';
+  const status = saveStatusText(p.save);
 
   const focusedFile = rows[current]?.kind === 'file' ? (rows[current] as { entry: Entry }).entry : null;
 
@@ -284,7 +291,7 @@ export function SavedWorkPanel(p: Props) {
 
       {p.error && (
         <p className="sw-error" role="alert">
-          Cloud list unavailable: {p.error}
+          Could not load your saved diagrams. {p.error}
         </p>
       )}
 
@@ -334,7 +341,10 @@ export function SavedWorkPanel(p: Props) {
               tabIndex={tabStop === id ? 0 : -1}
               className={`sw-file${active ? ' active' : ''}`}
               onFocus={() => setFocusId(id)}
-              onClick={() => setFocusId(id)}
+              onClick={() => {
+                setFocusId(id);
+                if (touch() && renaming !== e.id) p.onOpen(e);
+              }}
               onDoubleClick={() => p.onOpen(e)}
             >
               <FileText size={14} aria-hidden />
@@ -378,8 +388,8 @@ export function SavedWorkPanel(p: Props) {
           <button type="button" className="btn sm" disabled={!p.activeId} onClick={p.onPrint} title="Print / PDF (Ctrl+P)">
             <Printer size={14} /> Print / PDF
           </button>
-          <button type="button" className="btn sm" disabled={!p.activeId} onClick={p.onDownload} title="Download .drawio">
-            <Download size={14} /> .drawio
+          <button type="button" className="btn sm" disabled={!p.activeId} onClick={p.onDownload} title="Download a copy to this device (opens in draw.io)">
+            <Download size={14} /> Download
           </button>
         </div>
         <p className="sw-keys">↑↓ move · Enter open · F2 rename · Del delete · ←→ fold</p>

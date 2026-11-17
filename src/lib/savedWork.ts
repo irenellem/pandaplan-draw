@@ -61,16 +61,43 @@ export function tombstone(id: string): void {
 
 /* ------------------------------------------------------------------------------- reading */
 
+const TIMEOUT_MS = 20_000;
+export const SIGNED_OUT =
+  'Your sign-in has expired. Use Download to keep a copy of anything unsaved, then reload the page to sign in again.';
+
+/** An Access login page (or any HTML page) where the Worker's JSON or the diagram file was expected. */
+const looksHtml = (t: string) => /^\s*<(!doctype html|html|head|body)\b/i.test(t);
+
+/** fetch with a time limit and messages a staff member can act on (no "HTTP 401", no "Failed to fetch"). */
+async function call(url: string, init: RequestInit = {}): Promise<Response> {
+  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(TIMEOUT_MS) : undefined;
+  try {
+    return await fetch(url, { ...init, signal });
+  } catch (e) {
+    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new Error('The cloud storage took too long to answer. Check your connection and try again.');
+    }
+    throw new Error('Could not reach the cloud storage. Check your connection; if it keeps happening, reload the page.');
+  }
+}
+
+function httpError(r: Response, text: string, serverMsg?: string): Error {
+  if (r.status === 401 || r.status === 403 || looksHtml(text)) return new Error(SIGNED_OUT);
+  if (r.status === 413) return new Error('This diagram is too large for cloud storage. Use Download to keep a copy.');
+  if (r.status >= 500) return new Error('The cloud storage is having a problem right now. Try again in a minute.');
+  return new Error(serverMsg || `The cloud storage refused the request (error ${r.status}).`);
+}
+
 async function json<T>(r: Response): Promise<T> {
   const text = await r.text();
   let j: unknown;
   try {
     j = JSON.parse(text);
   } catch {
-    throw new Error(r.ok ? 'Backup service did not return JSON.' : `HTTP ${r.status}`);
+    throw r.ok && !looksHtml(text) ? new Error('The cloud storage sent an unexpected answer. Reload the page and try again.') : httpError(r, text);
   }
   const o = j as { ok?: boolean; error?: string };
-  if (!r.ok || o.ok === false) throw new Error(o.error || `HTTP ${r.status}`);
+  if (!r.ok || o.ok === false) throw httpError(r, text, o.error);
   return j as T;
 }
 
@@ -105,7 +132,7 @@ export async function listEntries(): Promise<{ entries: Entry[]; error: string |
   let error: string | null = null;
   const bySlug = new Map<string, Entry>();
   try {
-    const r = await fetch(`${API}/backups`, { headers: { accept: 'application/json' } });
+    const r = await call(`${API}/backups`, { headers: { accept: 'application/json' } });
     const j = await json<{ items: Snapshot[] }>(r);
     for (const s of j.items ?? []) {
       const slug = slugFromKey(s.key);
@@ -130,17 +157,24 @@ export async function readXml(e: Entry): Promise<string> {
     if (!pages[pid] || !diagrams[pid]) throw new Error('This browser no longer has that diagram.');
     return legacyToXml([pages[pid]], [diagrams[pid]]);
   }
-  if (!e.key) throw new Error('No stored snapshot for this file yet.');
-  const r = await fetch(`${API}/backup?key=${encodeURIComponent(e.key)}`, { headers: { accept: 'application/json' } });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!e.key) throw new Error('It has not finished saving yet. Press Refresh and try again.');
+  const r = await call(`${API}/backup?key=${encodeURIComponent(e.key)}`, { headers: { accept: 'application/json' } });
   const text = await r.text();
+  if (r.status === 404) throw new Error('It is no longer in cloud storage. Press Refresh to update the list.');
+  // An expired Access session answers 200 with a login page: never hand that to draw.io as a diagram
+  // (it would open blank, and the next autosave would bury the real drawing under an empty one).
+  if (!r.ok || looksHtml(text)) throw httpError(r, text);
   let raw: unknown = text;
   try {
     raw = JSON.parse(text);
   } catch {
     /* raw XML is accepted by toXml */
   }
-  return toXml(raw);
+  try {
+    return toXml(raw);
+  } catch {
+    throw new Error('The saved file is damaged or is not a diagram.');
+  }
 }
 
 /* ------------------------------------------------------------------------------- writing */
@@ -153,7 +187,7 @@ export interface SaveResult {
 
 /** Delete the cloud copy of a diagram. Removes every saved version of that slug, not just today's. */
 export async function deleteEntry(name: string): Promise<{ deleted: number }> {
-  const r = await fetch(`${API}/backup?name=${encodeURIComponent(name)}`, {
+  const r = await call(`${API}/backup?name=${encodeURIComponent(name)}`, {
     method: 'DELETE',
     headers: { accept: 'application/json' },
   });
@@ -166,7 +200,7 @@ export async function deleteEntry(name: string): Promise<{ deleted: number }> {
 export async function saveXml(name: string, xml: string, keepalive = false): Promise<SaveResult> {
   const file: DrawioFile = makeFile(name, xml);
   const body = JSON.stringify(file);
-  const r = await fetch(`${API}/backup?name=${encodeURIComponent(name)}`, {
+  const r = await call(`${API}/backup?name=${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body,

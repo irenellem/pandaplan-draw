@@ -1,7 +1,7 @@
-import { FilePlus2 } from 'lucide-react';
+import { ChevronLeft, FilePlus2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
-import { SavedWorkPanel, type SaveState } from './components/SavedWorkPanel';
+import { SavedWorkPanel, saveStatusText, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
 import { downloadText } from './lib/download';
@@ -37,7 +37,8 @@ export function App() {
     setOpenState(o);
   };
 
-  const fail = (what: string, e: unknown) => setSave({ state: 'error', error: `${what}: ${e instanceof Error ? e.message : String(e)}` });
+  const fail = (what: string, e?: unknown) =>
+    setSave({ state: 'error', error: e === undefined ? `${what}.` : `${what}: ${e instanceof Error ? e.message : String(e)}` });
 
   /* ---------------------------------------------------------------------- list + mount */
 
@@ -126,7 +127,7 @@ export function App() {
           return true;
         } catch (e) {
           if (isOpen()) {
-            fail('Save failed (changes are still in the editor)', e);
+            fail('Not saved (your changes are still on screen)', e);
           } else if (entriesRef.current.some((x) => x.id === cur.id)) {
             // The editor has moved on: this XML exists nowhere else. Hand it to the user.
             downloadText(xml, `${cur.name}.unsaved.drawio`, 'application/xml');
@@ -152,9 +153,28 @@ export function App() {
 
   useEffect(() => {
     const onHide = () => void flush(true);
+    // Phones rarely fire pagehide/beforeunload: switching apps or locking the screen only hides the page.
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') void flush(true);
+      else void refresh(); // back from another device or tab: show its saves
+    };
+    // Closing the tab inside the 2 s autosave wait, during a save, or after a failed save would drop
+    // the last edits silently: ask the browser to warn first.
+    const onBeforeUnload = (ev: BeforeUnloadEvent) => {
+      if (!openRef.current || !latestXml.current || latestXml.current === savedXml.current) return;
+      void flush(true);
+      ev.preventDefault();
+      ev.returnValue = '';
+    };
     window.addEventListener('pagehide', onHide);
-    return () => window.removeEventListener('pagehide', onHide);
-  }, [flush]);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [flush, refresh]);
 
   /* ---------------------------------------------------------------------- file actions */
 
@@ -167,7 +187,7 @@ export function App() {
       cur &&
       openRef.current?.token === cur.token &&
       !window.confirm(
-        `"${cur.name}" has changes that could not be saved to the cloud.\n\nOpen "${e.name}" anyway and discard them?\n(Cancel keeps it open; ".drawio" downloads a copy.)`,
+        `"${cur.name}" has changes that could not be saved to the cloud.\n\nOpen "${e.name}" anyway and discard them?\n(Cancel keeps it open; the Download button saves a copy to this device.)`,
       )
     ) {
       return;
@@ -234,6 +254,13 @@ export function App() {
           setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
           if (latestXml.current !== xml) void flush();
         }
+        // The tombstone only hides the old name in this browser; without this the phone and every
+        // other device keep showing it, so one rename leaves two files.
+        if (e.source === 'cloud') {
+          await deleteEntry(e.id).catch(() =>
+            fail(`Renamed to "${name}", but the old name "${e.name}" still shows on other devices. Delete it there`),
+          );
+        }
         return name;
       } catch (err) {
         fail(`Rename failed`, err);
@@ -259,8 +286,13 @@ export function App() {
     setEntries((list) => list.filter((x) => x.id !== e.id));
     entriesRef.current = entriesRef.current.filter((x) => x.id !== e.id);
     if (e.source === 'cloud') {
-      void deleteEntry(e.id).catch((err) =>
-        fail(`"${e.name}" is hidden here, but the cloud copy could not be deleted`, err),
+      // On the save queue: a save already in flight for this file lands first, so the delete removes
+      // it too instead of the diagram reappearing on other devices.
+      void enqueue(() =>
+        deleteEntry(e.id).then(
+          () => undefined,
+          (err) => fail(`"${e.name}" is hidden here, but the cloud copy could not be deleted`, err),
+        ),
       );
     }
     return true;
@@ -325,7 +357,7 @@ export function App() {
           setOpen(null);
         }}
         onTimeout={() =>
-          setMount({ status: 'missing', reason: `the /drawio/ page loaded but draw.io sent no init message within ${INIT_TIMEOUT_MS / 1000} seconds` })
+          setMount({ status: 'missing', reason: `the editor page loaded but did not start within ${INIT_TIMEOUT_MS / 1000} seconds` })
         }
       />
     );
@@ -343,7 +375,7 @@ export function App() {
 
   return (
     <>
-      <div className="sw-app" data-app="pandaplan-draw">
+      <div className={`sw-app${open ? ' has-open' : ''}`} data-app="pandaplan-draw">
         <SavedWorkPanel
           entries={entries}
           loading={loading}
@@ -359,6 +391,26 @@ export function App() {
           onDownload={download}
         />
         <main className="sw-main" aria-label="Diagram editor">
+          {open && (
+            // Phone only (CSS): the folder is hidden while a diagram is open, so this is the way back
+            // to it and the only place the save line shows.
+            <div className="sw-mobilebar">
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => {
+                  void flush();
+                  setOpen(null);
+                }}
+              >
+                <ChevronLeft size={14} /> Saved work
+              </button>
+              <span className="sw-mobilebar-name">{open.name}</span>
+              <span className={`sw-mobilebar-status${save.state === 'error' ? ' err' : ''}`} role="status">
+                {saveStatusText(save)}
+              </span>
+            </div>
+          )}
           {main}
         </main>
       </div>
