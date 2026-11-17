@@ -5,6 +5,7 @@ import { MoveSelect, SavedWorkPanel, saveStatusText, when, type SaveState } from
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
 import { nextSlot, type Slot } from './lib/editorSlot';
+import { parsePath, pathFor } from './lib/nav';
 import { beginOpen } from './lib/perf';
 import { prefetchDrawio, warmupAllowed, whenIdle } from './lib/warmup';
 import { downloadText, titleFilename } from './lib/download';
@@ -54,6 +55,8 @@ export function App() {
   const chain = useRef<Promise<void>>(Promise.resolve());
   const linkRef = useRef<DrawioLink | null>(null);
   const token = useRef(0);
+  const openSeq = useRef(0);
+  const booted = useRef(false);
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
 
@@ -65,16 +68,33 @@ export function App() {
 
   // The URL follows the screen: /f/<slug> for a file, / for the file home. Back returns home.
   useEffect(() => {
-    const want = open ? `/f/${encodeURIComponent(open.name)}` : '/';
+    const want = open ? pathFor({ name: open.name, folder: open.folder ?? '' }) : '/';
     if (window.location.pathname !== want) window.history.pushState({ name: open?.name ?? null }, '', want);
   }, [open?.id]);
 
+  // Boot: a cold load of /f/<slug> opens that file instead of showing the home screen.
+  useEffect(() => {
+    if (booted.current || loading) return;
+    booted.current = true;
+    const r = parsePath(window.location.pathname);
+    if (r.view !== 'editor') return;
+    const hit = entriesRef.current.find((x) => x.name === r.name && (x.folder ?? '') === (r.folder ?? ''));
+    if (hit) void openEntry(hit);
+    else window.history.replaceState({}, '', '/');
+  }, [loading, entries.length]);
+
+  // Back / Forward move the screen, in both directions.
   useEffect(() => {
     const onPop = () => {
-      if (window.location.pathname.startsWith('/f/')) return;
-      if (!openRef.current) return;
-      void flush();
-      setOpen(null);
+      const r = parsePath(window.location.pathname);
+      if (r.view === 'home') {
+        if (!openRef.current) return;
+        void flush();
+        setOpen(null);
+        return;
+      }
+      const hit = entriesRef.current.find((x) => x.name === r.name && (x.folder ?? '') === (r.folder ?? ''));
+      if (hit && openRef.current?.id !== hit.id) void openEntry(hit);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -293,8 +313,12 @@ export function App() {
   const openEntry = async (e: Entry) => {
     const cur = openRef.current;
     if (cur?.id === e.id) return;
+    // Every open takes a ticket: a slow read for an earlier click must never win over a later one,
+    // and must never overwrite the buffer an edit is being typed into right now.
+    const seq = ++openSeq.current;
     beginOpen(titleOf(e));
     const saved = await flush();
+    if (seq !== openSeq.current) return;
     if (
       !saved &&
       cur &&
@@ -307,6 +331,7 @@ export function App() {
     }
     try {
       const xml = await readXml(e);
+      if (seq !== openSeq.current) return;
       const cloud = entriesRef.current.filter((x) => x.source === 'cloud').map((x) => x.name);
       const name = e.source === 'browser' ? uniqueSlug(e.name, cloud) : e.name;
       latestXml.current = xml;

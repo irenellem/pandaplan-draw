@@ -259,6 +259,7 @@ try {
     const NEW = 'Q&A: Final — v2 (Draft)';
     await waitFor(() => /^Saved /.test(document.querySelector('.sw-status')?.textContent ?? ''), 'saves settled', 6000);
     const before = (await dump()).map((o) => o.key);
+    await waitFor(() => !document.querySelector('.sw-loading'), 'no busy overlay');
     await run(focusRow, TITLE);
     await key('F2', { code: 'F2', vk: 113 });
     await waitFor(() => document.activeElement?.classList.contains('sw-rename') && document.activeElement.value === 'PR# 123 – QC Report', 'rename input prefilled with the title');

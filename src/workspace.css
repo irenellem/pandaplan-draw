@@ -132,7 +132,6 @@
    is opened; then the editor fills it and the top bar leads back. */
 @media (max-width: 700px) {
   .sw-panel { flex: 1 1 auto; width: 100%; border-right: 0; }
-  .sw-app.has-open .sw-panel { display: none; }
   /* Off-screen rather than display:none, so a warm spare editor boots at the real phone size and
      is not laid out at 0x0 (visibility:hidden also keeps it out of the tab order and screen readers). */
   .sw-app:not(.has-open) .sw-main { position: fixed; top: 0; left: -200vw; width: 100vw; height: 100vh; visibility: hidden; }
