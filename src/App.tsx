@@ -45,6 +45,7 @@ export function App() {
   const [theme, setTheme] = useState<ThemeChoice>(readTheme);
   const [emptyFolders, setEmptyFolders] = useState<string[]>(localFolders);
   const [slot, setSlot] = useState<Slot | null>(null);
+  const [drawer, setDrawer] = useState(false);
 
   const openRef = useRef<Open | null>(null);
   const latestXml = useRef('');
@@ -61,6 +62,23 @@ export function App() {
     setOpenState(o);
     setSlot((s) => nextSlot(s, o !== null));
   };
+
+  // The URL follows the screen: /f/<slug> for a file, / for the file home. Back returns home.
+  useEffect(() => {
+    const want = open ? `/f/${encodeURIComponent(open.name)}` : '/';
+    if (window.location.pathname !== want) window.history.pushState({ name: open?.name ?? null }, '', want);
+  }, [open?.id]);
+
+  useEffect(() => {
+    const onPop = () => {
+      if (window.location.pathname.startsWith('/f/')) return;
+      if (!openRef.current) return;
+      void flush();
+      setOpen(null);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const fail = (what: string, e?: unknown) =>
     setSave({ state: 'error', error: e === undefined ? `${what}.` : `${what}: ${e instanceof Error ? e.message : String(e)}` });
@@ -615,7 +633,7 @@ export function App() {
 
   return (
     <>
-      <div className={`sw-app${open ? ' has-open' : ''}`} data-app="pandaplan-draw">
+      <div className={`sw-app${open ? ' has-open' : ''}${open && drawer ? ' panel-open' : ''}`} data-app="pandaplan-draw">
         <SavedWorkPanel
           entries={entries}
           loading={loading}
@@ -625,7 +643,10 @@ export function App() {
           folders={folders}
           theme={theme}
           onTheme={cycleTheme}
-          onOpen={(e) => void openEntry(e)}
+          onOpen={(e) => {
+            setDrawer(false);
+            void openEntry(e);
+          }}
           onNew={newDiagram}
           onRename={rename}
           onDuplicate={duplicate}
@@ -643,6 +664,17 @@ export function App() {
           {/* The file toolbar. Desktop: always there (Save shows, disabled, with nothing open).
               Phone: only with a diagram open, where it is also the way back to the folder. */}
           <div className="sw-filebar">
+            {open && (
+              <button
+                type="button"
+                className="btn sm sw-files"
+                aria-expanded={drawer}
+                onClick={() => setDrawer((d) => !d)}
+                title="Show the saved-work list"
+              >
+                <Folder size={14} /> Files
+              </button>
+            )}
             {open && (
               <button
                 type="button"

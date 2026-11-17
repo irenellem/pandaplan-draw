@@ -195,3 +195,46 @@
   .sw-skeleton { grid-template-columns: 1fr; }
   .sw-skel-side { display: none; }
 }
+
+
+/* ---- Two screens, one page load: the file home, then the editor -------------------------------
+   With no file open the saved-work list IS the page: full width, centred, roomy rows. Open a file
+   and the editor takes the window while the list steps aside. The editor frame itself is never
+   unmounted — it is moved off-screen and back, so opening a file is a load message, not a reload. */
+.sw-app:not(.has-open) .sw-panel {
+  flex: 1 1 auto;
+  width: auto;
+  border-right: 0;
+  background: var(--canvas);
+}
+.sw-app:not(.has-open) .sw-panel > * { width: 100%; max-width: 880px; margin-left: auto; margin-right: auto; }
+.sw-app:not(.has-open) .sw-head { padding: 34px 12px 6px; }
+.sw-app:not(.has-open) .sw-head h1 { font-size: 21px; letter-spacing: -0.01em; }
+.sw-app:not(.has-open) .sw-search { margin: 0 12px 10px; }
+.sw-app:not(.has-open) .sw-search input { height: 38px; font-size: 14px; }
+.sw-app:not(.has-open) .sw-tree { border-top: 0; padding: 10px 12px 20px; }
+.sw-app:not(.has-open) .sw-file { padding: 11px 10px 11px 30px; border-radius: 8px; }
+.sw-app:not(.has-open) .sw-file .sw-name strong { font-size: 14.5px; }
+.sw-app:not(.has-open) .sw-name small { font-size: 12px; }
+.sw-app:not(.has-open) .sw-main {
+  position: fixed;
+  top: 0;
+  left: -200vw;
+  width: 100vw;
+  height: 100vh;
+  visibility: hidden;
+}
+.sw-app.has-open .sw-main { flex: 1 1 auto; }
+/* In the editor the list is a drawer, not a column: off-canvas until the Files button pulls it in. */
+.sw-app.has-open .sw-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 320px;
+  z-index: 40;
+  transform: translateX(-102%);
+  transition: transform 0.18s ease;
+  box-shadow: 0 0 0 1px var(--line), 12px 0 32px rgba(0, 0, 0, 0.18);
+}
+.sw-app.has-open.panel-open .sw-panel { transform: none; }
