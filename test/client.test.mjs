@@ -18,6 +18,9 @@ await build({
       export { slugify, makeFile } from './src/lib/drawioFile';
       export { titleFilename } from './src/lib/download';
       export { runSelfTest } from './src/lib/selftest';
+      export { nextSlot, newSpare } from './src/lib/editorSlot';
+      export { connectDrawio } from './src/lib/drawioProtocol';
+      export { prefetchUrls, warmupAllowed } from './src/lib/warmup';
       export { SavedWorkPanel } from './src/components/SavedWorkPanel';
       export { createElement } from 'react';
       export { renderToStaticMarkup } from 'react-dom/server';`,
@@ -126,5 +129,74 @@ test('the panel renders titles exactly, the Duplicate action and the truncation 
 test('?selftest=1 diagnostics are all ok and JSON-serialisable', () => {
   const r = JSON.parse(JSON.stringify(m.runSelfTest('0.1.0', '/')));
   assert.equal(r.ok, true, JSON.stringify(r.checks.filter((c) => !c.ok)));
-  assert.ok(r.checks.length >= 8);
+  assert.ok(r.checks.length >= 11, `${r.checks.length} checks`);
+  assert.ok('timings' in r && 'shell' in r.timings && 'lastOpen' in r.timings);
+});
+
+test('editor frames: a spare is adopted once, a frame never changes file', () => {
+  const spare = m.newSpare();
+  const a = m.nextSlot(spare, { token: 1 });
+  assert.deepEqual(a, { key: spare.key, token: 1 }, 'first open adopts the spare (same key = same iframe)');
+  assert.equal(m.nextSlot(a, { token: 1 }), a, 'rename/move of the open file keeps its frame');
+  const b = m.nextSlot(a, { token: 2 });
+  assert.notEqual(b.key, a.key, 'switching file A → B gets a new frame, never reuses A\'s');
+  assert.equal(b.token, 2);
+  assert.equal(m.nextSlot(b, null), null, 'closing drops that file\'s frame');
+  assert.equal(m.nextSlot(spare, null), spare, 'a spare survives with nothing open');
+  assert.equal(m.nextSlot(null, { token: 3 }).token, 3, 'no spare: a fresh frame, as before');
+});
+
+test('draw.io protocol: a spare defers its single load until a file is assigned', () => {
+  const ORIGIN = 'http://stub.local';
+  const win = new EventTarget();
+  win.location = { origin: ORIGIN };
+  const prevWindow = globalThis.window;
+  globalThis.window = win;
+  try {
+    const sent = [];
+    const child = { postMessage: (data) => sent.push(JSON.parse(data)) };
+    const frame = { contentWindow: child };
+    let file = null;
+    let loaded = 0;
+    const link = m.connectDrawio(frame, { onInit: () => file, onLoaded: () => loaded++, onSave() {}, onAutosave() {}, onExit() {}, title: () => 'T' });
+    const post = (msg, source = child) => {
+      const ev = new Event('message');
+      Object.assign(ev, { data: JSON.stringify(msg), origin: ORIGIN, source });
+      win.dispatchEvent(ev);
+    };
+    assert.equal(link.load('<early/>'), false, 'no load before init');
+    post({ event: 'init' });
+    assert.equal(link.ready, true);
+    assert.deepEqual(sent, [], 'a spare sends nothing at init');
+    file = '<mxfile/>';
+    assert.equal(link.load(file), true);
+    assert.equal(link.load('<again/>'), false, 'a frame gets one load only');
+    assert.deepEqual(sent, [{ action: 'load', xml: '<mxfile/>', autosave: 1, title: 'T' }]);
+    post({ event: 'load' }, {}); // wrong source: ignored
+    assert.equal(loaded, 0);
+    post({ event: 'load' });
+    assert.equal(loaded, 1, 'draw.io\'s load event = editor usable');
+    link.dispose();
+
+    // A fresh frame (file known at init) still loads straight away, as before.
+    const sent2 = [];
+    const child2 = { postMessage: (d) => sent2.push(JSON.parse(d)) };
+    const l2 = m.connectDrawio({ contentWindow: child2 }, { onInit: () => '<x/>', onSave() {}, onAutosave() {}, onExit() {} });
+    const ev = new Event('message');
+    Object.assign(ev, { data: JSON.stringify({ event: 'init' }), origin: ORIGIN, source: child2 });
+    win.dispatchEvent(ev);
+    assert.deepEqual(sent2, [{ action: 'load', xml: '<x/>', autosave: 1, title: '' }]);
+    assert.equal(l2.loadSent, true);
+    l2.dispose();
+  } finally {
+    globalThis.window = prevWindow;
+  }
+});
+
+test('warm-up: Save-Data skips it; prefetch stays on /drawio/ and skips the no-store page', () => {
+  assert.equal(m.warmupAllowed({ connection: { saveData: true } }), false);
+  assert.equal(m.warmupAllowed({ connection: { saveData: false } }), true);
+  const u = m.prefetchUrls();
+  assert.ok(u.includes('/drawio/js/app.min.js'));
+  assert.ok(u.every((x) => x.startsWith('/drawio/') && !x.endsWith('index.html') && !x.endsWith('/')));
 });

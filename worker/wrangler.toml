@@ -1,0 +1,12 @@
+# PandaPlan Draw API — the backup endpoint behind Cloudflare Access on draw.pandaplan.work.
+# Deploy: cd worker && unset CLOUDFLARE_API_TOKEN && npx wrangler@4 deploy
+name = "pandaplan-draw-api"
+main = "pandaplan-draw-api.mjs"
+compatibility_date = "2026-11-01"
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "backup"
+
+[observability]
+enabled = true

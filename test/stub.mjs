@@ -38,6 +38,7 @@ export const FAKE_DRAWIO = `<!doctype html><html><head><meta charset="utf-8"><ti
       area.value = hit ? dec(hit[1]) : '';
       document.getElementById('title').textContent = m.title || '';
       document.body.dataset.loaded = '1';
+      post({ event: 'load', xml: base }); // real draw.io (proto=json) answers every load with this
     }
     if (m.action === 'export') {
       const h = Number(localStorage.getItem('fakeSvgHeight')) || 300;
@@ -46,7 +47,9 @@ export const FAKE_DRAWIO = `<!doctype html><html><head><meta charset="utf-8"><ti
     }
   });
   area.addEventListener('input', () => post({ event: 'autosave', xml: xml() }));
-  post({ event: 'init' });
+  // localStorage.fakeInitDelay (ms) holds back init, to see the loader's stages in e2e.
+  const delay = Number(localStorage.getItem('fakeInitDelay')) || 0;
+  setTimeout(() => { document.body.dataset.inited = '1'; post({ event: 'init' }); }, delay);
 </script></body></html>`;
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json' };

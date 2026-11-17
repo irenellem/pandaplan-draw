@@ -36,8 +36,13 @@ export async function probeDrawio(): Promise<Probe> {
 }
 
 export interface DrawioHandlers {
-  /** Return the XML to load. */
-  onInit(): string;
+  /**
+   * Return the XML to load, or null to defer: a warm spare frame boots with no file yet and gets its
+   * one `load` later through `link.load()`. Either way a frame is sent `load` at most once.
+   */
+  onInit(): string | null;
+  /** draw.io's `load` event (proto=json): the diagram is on the canvas and the editor is usable. */
+  onLoaded?(): void;
   onSave(xml: string): void;
   onAutosave(xml: string): void;
   onExit(): void;
@@ -48,16 +53,28 @@ export interface DrawioLink {
   send(msg: Record<string, unknown>): void;
   /** Ask draw.io for an SVG data URI of the current diagram (used for host-side Print / PDF). */
   exportSvg(timeoutMs?: number): Promise<string>;
+  /** Send the deferred `load` (see `onInit`). False if draw.io has not sent `init` yet, or a load was already sent. */
+  load(xml: string): boolean;
+  /** draw.io sent `init`. */
   readonly ready: boolean;
+  /** `load` has been sent to this frame. */
+  readonly loadSent: boolean;
   dispose(): void;
 }
 
 export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): DrawioLink {
   let ready = false;
+  let loadSent = false;
   const waiters: Array<(data: string | null) => void> = [];
 
   const send = (msg: Record<string, unknown>) => {
     frame.contentWindow?.postMessage(JSON.stringify(msg), window.location.origin);
+  };
+
+  // autosave:1 turns on `autosave` events without changing the iframe URL.
+  const doLoad = (xml: string) => {
+    loadSent = true;
+    send({ action: 'load', xml, autosave: 1, title: h.title?.() ?? '' });
   };
 
   const onMessage = (ev: MessageEvent) => {
@@ -73,10 +90,14 @@ export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): Draw
       case 'configure':
         send({ ...CONFIGURE_REPLY });
         break;
-      case 'init':
+      case 'init': {
         ready = true;
-        // autosave:1 turns on `autosave` events without changing the iframe URL.
-        send({ action: 'load', xml: h.onInit(), autosave: 1, title: h.title?.() ?? '' });
+        const xml = h.onInit();
+        if (xml !== null && !loadSent) doLoad(xml);
+        break;
+      }
+      case 'load':
+        h.onLoaded?.();
         break;
       case 'autosave':
         if (typeof msg.xml === 'string') h.onAutosave(msg.xml);
@@ -98,6 +119,14 @@ export function connectDrawio(frame: HTMLIFrameElement, h: DrawioHandlers): Draw
     send,
     get ready() {
       return ready;
+    },
+    get loadSent() {
+      return loadSent;
+    },
+    load(xml: string) {
+      if (!ready || loadSent) return false;
+      doLoad(xml);
+      return true;
     },
     exportSvg(timeoutMs = 8000) {
       if (!ready) return Promise.reject(new Error('Editor not ready.'));

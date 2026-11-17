@@ -311,6 +311,100 @@ try {
     return `display:${shown}, ${pages} page`;
   });
 
+  /* ------------------------------------------------ fast open: warm-up, hand-off, loader */
+  const OPENME = 'Q&A: Final — v2 (Draft)';
+  const openRow = (title) => {
+    const li = [...document.querySelectorAll('.sw-file')].find((x) => x.querySelector('.sw-name strong')?.textContent === title);
+    if (!li) throw new Error(`no row ${title}`);
+    li.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    return true;
+  };
+  const settledThenReload = async () => {
+    await waitFor(() => !/Unsaved|Saving/.test(document.querySelector('.sw-status')?.textContent ?? ''), 'saves settled', 8000);
+    await goto(`${BASE}/`);
+    await waitFor(() => document.querySelectorAll('.sw-file').length > 0, 'rows');
+  };
+
+  await check('warm-up: once the list shows, draw.io files are prefetched and a hidden editor boots behind the empty state', async () => {
+    await settledThenReload();
+    const got = await waitFor(() => {
+      const f = document.querySelector('.sw-frame-wrap.spare iframe');
+      if (!f || f.contentDocument?.body?.dataset.inited !== '1') return null;
+      return {
+        prefetch: [...document.querySelectorAll('link[rel=prefetch][data-drawio-prefetch]')].map((l) => new URL(l.href).pathname),
+        hidden: getComputedStyle(f.parentElement).visibility,
+        empty: !!document.querySelector('.sw-empty-main'),
+        frames: document.querySelectorAll('iframe').length,
+      };
+    }, 'spare editor booted', 8000);
+    if (!got.prefetch.includes('/drawio/js/app.min.js')) throw new Error(`prefetch: ${JSON.stringify(got.prefetch)}`);
+    if (got.prefetch.some((x) => x.endsWith('index.html') || x.endsWith('/'))) throw new Error(`prefetched the no-store page: ${got.prefetch}`);
+    eq({ hidden: got.hidden, empty: got.empty, frames: got.frames }, { hidden: 'hidden', empty: true, frames: 1 }, 'spare state');
+    return `${got.prefetch.length} prefetches, spare hidden behind the empty state`;
+  });
+
+  await check('open a file → the warm editor is adopted (same iframe, not reloaded), file loads, skeleton gone', async () => {
+    await run(() => {
+      window.__warm = document.querySelector('iframe');
+      window.__warm.contentWindow.__booted = 'yes'; // gone if the frame reloads
+      return true;
+    });
+    await run(openRow, OPENME);
+    await waitFor(() => document.querySelector('iframe')?.contentDocument?.body?.dataset.loaded === '1', 'file loaded into the editor');
+    await waitFor(() => !document.querySelector('.sw-skeleton'), 'skeleton gone', 3000);
+    const got = await run(() => {
+      const f = document.querySelector('iframe');
+      const rec = (window.__pandadrawPerf || []).at(-1) || null;
+      return { same: f === window.__warm, booted: f.contentWindow.__booted ?? null, frames: document.querySelectorAll('iframe').length, spare: !!document.querySelector('.sw-frame-wrap.spare'), title: f.contentDocument.getElementById('title').textContent, rec };
+    });
+    eq({ same: got.same, booted: got.booted, frames: got.frames, spare: got.spare, title: got.title, path: got.rec?.path }, { same: true, booted: 'yes', frames: 1, spare: false, title: OPENME, path: 'warm-booted' }, 'adoption');
+    return `advisory timing (fake editor, not a gate): click → usable ${got.rec.clickToUsableMs} ms`;
+  });
+
+  await check('loader: canvas skeleton with a stage line, "Still working…" after 8 s, never the old bullet text', async () => {
+    await run(() => {
+      localStorage.setItem('fakeInitDelay', '12000');
+      return true;
+    });
+    try {
+      await settledThenReload();
+      await run(openRow, OPENME);
+      const first = await waitFor(() => {
+        const s = document.querySelector('.sw-skeleton .sw-skel-stage');
+        return s ? { text: s.textContent, grid: !!document.querySelector('.sw-skeleton .sw-skel-canvas'), old: document.body.textContent.includes('Loading the drawing editor') } : null;
+      }, 'skeleton', 4000);
+      eq(first, { text: 'Preparing the editor…', grid: true, old: false }, 'first stage');
+      const slow = await waitFor(() => document.querySelector('.sw-skel-stage span')?.textContent ?? null, '"Still working" line', 10000);
+      eq(slow, 'Still working — the editor takes a few seconds on a fresh session.', 'slow line');
+      await waitFor(() => !document.querySelector('.sw-skeleton') && document.querySelector('iframe')?.contentDocument?.body?.dataset.loaded === '1', 'editor usable after the slow boot', 8000);
+      return `"${first.text}" → "${slow}"`;
+    } finally {
+      await run(() => {
+        localStorage.removeItem('fakeInitDelay');
+        return true;
+      });
+    }
+  });
+
+  await check('Save-Data: no prefetch and no spare editor; opening a file still works (fresh frame)', async () => {
+    const { identifier } = await cdp('Page.addScriptToEvaluateOnNewDocument', {
+      source: `Object.defineProperty(Navigator.prototype, 'connection', { configurable: true, get: () => ({ saveData: true }) });`,
+    });
+    try {
+      await settledThenReload();
+      await sleep(2500); // past any idle callback
+      const before = await run(() => ({ prefetch: document.querySelectorAll('link[rel=prefetch]').length, frames: document.querySelectorAll('iframe').length }));
+      eq(before, { prefetch: 0, frames: 0 }, 'nothing warmed');
+      await run(openRow, OPENME);
+      await waitFor(() => document.querySelector('iframe')?.contentDocument?.body?.dataset.loaded === '1', 'file loaded');
+      const path = await waitFor(() => (window.__pandadrawPerf || []).at(-1)?.path ?? null, 'perf record');
+      eq(path, 'fresh', 'open path');
+      return 'nothing fetched ahead; open used a fresh frame';
+    } finally {
+      await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+    }
+  });
+
   await check('list cut at 400 → the panel says "Showing 400 of N"', async () => {
     await stub('/__stub/seed', 'POST', JSON.stringify({ count: 420 }));
     await run(clickButton, 'Refresh list');

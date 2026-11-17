@@ -133,7 +133,9 @@
 @media (max-width: 700px) {
   .sw-panel { flex: 1 1 auto; width: 100%; border-right: 0; }
   .sw-app.has-open .sw-panel { display: none; }
-  .sw-app:not(.has-open) .sw-main { display: none; }
+  /* Off-screen rather than display:none, so a warm spare editor boots at the real phone size and
+     is not laid out at 0x0 (visibility:hidden also keeps it out of the tab order and screen readers). */
+  .sw-app:not(.has-open) .sw-main { position: fixed; top: 0; left: -200vw; width: 100vw; height: 100vh; visibility: hidden; }
   .sw-keys { display: none; }
   /* iOS zooms the whole page into any input under 16px and leaves it zoomed (sideways scrolling). */
   .sw-search input, .sw-new input, .sw-rename { font-size: 16px; }
@@ -161,5 +163,35 @@
 }
 
 .sw-frame-wrap { position: absolute; inset: 0; display: flex; }
-.sw-loading { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; font-size: 13px; color: var(--ink-2); pointer-events: none; }
-.sw-loading span { font-size: 12px; opacity: .75; }
+/* A spare editor booting behind the empty state: laid out at full size, never seen or focused. */
+.sw-frame-wrap.spare { visibility: hidden; pointer-events: none; }
+
+/* Loader = the shape of the editor, not a bullet: a toolbar strip, a shapes column and a faint grid
+   canvas, with one plain line saying what is happening. Static on purpose: nothing pulses. */
+.sw-skeleton { position: absolute; inset: 0; z-index: 1; display: grid; grid-template-rows: 40px 1fr; grid-template-columns: 208px 1fr; background: var(--canvas); pointer-events: none; }
+.sw-skel-bar { grid-column: 1 / -1; background: var(--panel); border-bottom: 1px solid var(--line-2); }
+.sw-skel-side {
+  background: var(--panel);
+  border-right: 1px solid var(--line-2);
+  /* rows of shape tiles */
+  background-image: linear-gradient(90deg, var(--panel-2) 0 34px, transparent 34px 46px, var(--panel-2) 46px 80px, transparent 80px 92px, var(--panel-2) 92px 126px, transparent 126px 138px, var(--panel-2) 138px 172px, transparent 172px);
+  background-size: 100% 46px;
+  background-position: 16px 18px;
+  background-repeat: repeat-y;
+  background-clip: content-box;
+  padding-bottom: 40%;
+}
+.sw-skel-canvas {
+  display: flex; align-items: center; justify-content: center;
+  background-color: var(--canvas);
+  --skel-grid: color-mix(in srgb, var(--grid) 55%, transparent);
+  background-image: linear-gradient(var(--skel-grid) 1px, transparent 1px), linear-gradient(90deg, var(--skel-grid) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-position: -1px -1px;
+}
+.sw-skel-stage { margin: 0; padding: 9px 16px; display: flex; flex-direction: column; gap: 4px; align-items: center; text-align: center; max-width: min(460px, 90%); font-size: 13px; color: var(--ink-2); background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); }
+.sw-skel-stage span { font-size: 12px; color: var(--ink-3); }
+@media (max-width: 700px) {
+  .sw-skeleton { grid-template-columns: 1fr; }
+  .sw-skel-side { display: none; }
+}

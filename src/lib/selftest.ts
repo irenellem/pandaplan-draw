@@ -1,6 +1,8 @@
 import { blankXml, clampTitle, makeFile, slugify, toXml, TITLE_MAX } from './drawioFile';
 import { titleFilename } from './download';
+import { lastOpen, shellTiming, type OpenTiming } from './perf';
 import { pretty, titleOf, uniqueSlug } from './savedWork';
+import { prefetchUrls, SLOW_AFTER_MS, stageText, warmupAllowed } from './warmup';
 
 /**
  * `?selftest=1` diagnostics: the host's smoke test. Pure and offline (never a network call), so it
@@ -13,6 +15,11 @@ export interface SelfTest {
   storage: string;
   basePath: string;
   checks: Array<{ name: string; ok: boolean; detail?: string }>;
+  /**
+   * Measured in this browser, never estimated. `shell`: this page's own navigation timing.
+   * `lastOpen`: the last diagram opened in this tab (open one, then load ?selftest=1 in the same tab).
+   */
+  timings: { shell: { domReadyMs: number; loadMs: number | null } | null; lastOpen: OpenTiming | null };
 }
 
 export function runSelfTest(version: string, basePath: string): SelfTest {
@@ -43,6 +50,18 @@ export function runSelfTest(version: string, basePath: string): SelfTest {
     const n = titleFilename('Q&A: Final — v2 (Draft)', '.drawio');
     return n === 'Q&A Final — v2 (Draft).drawio' || n;
   });
+  check('editor warm-up is skipped on Save-Data', () =>
+    (!warmupAllowed({ connection: { saveData: true } }) && warmupAllowed({ connection: {} }) && warmupAllowed(undefined)) || 'saveData ignored',
+  );
+  check('prefetch: same-origin draw.io files only, never its no-store page', () => {
+    const u = prefetchUrls();
+    const ok = u.length > 0 && u.every((x) => x.startsWith('/drawio/') && !x.endsWith('/') && !x.endsWith('index.html')) && u.includes('/drawio/js/app.min.js');
+    return ok || u.join(', ');
+  });
+  check('loader names the stage in plain words', () => {
+    const ok = stageText('preparing', T) === 'Preparing the editor…' && stageText('opening', T) === `Opening ${T}…` && SLOW_AFTER_MS === 8000;
+    return ok || `${stageText('preparing', T)} / ${stageText('opening', T)}`;
+  });
   check('localStorage available', () => {
     if (typeof localStorage === 'undefined') return 'no localStorage';
     localStorage.setItem('pandadraw.selftest', '1');
@@ -57,5 +76,6 @@ export function runSelfTest(version: string, basePath: string): SelfTest {
     storage: 'cloud (R2 via /api/draw) + localStorage',
     basePath,
     checks,
+    timings: { shell: shellTiming(), lastOpen: lastOpen() },
   };
 }

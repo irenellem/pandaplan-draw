@@ -4,6 +4,9 @@ import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
 import { MoveSelect, SavedWorkPanel, saveStatusText, when, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
+import { newSpare, nextSlot, type Slot } from './lib/editorSlot';
+import { beginOpen } from './lib/perf';
+import { prefetchDrawio, warmupAllowed, whenIdle } from './lib/warmup';
 import { downloadText, titleFilename } from './lib/download';
 import {
   clampTitle,
@@ -29,7 +32,6 @@ const AUTOSAVE_MS = 2000;
 /** `name` is the slug (storage key); `title` the display title ("" = old file, shown via `pretty`). */
 type Open = { id: string; name: string; title: string; folder: string; xml: string; token: number; source: Source };
 type Mount = { status: 'probing' | 'mounted' | 'missing'; reason: string | null };
-
 /** Workspace: saved-work folder on the left, draw.io full-bleed on the right. */
 export function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -42,6 +44,7 @@ export function App() {
   const [printImg, setPrintImg] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeChoice>(readTheme);
   const [emptyFolders, setEmptyFolders] = useState<string[]>(localFolders);
+  const [slot, setSlot] = useState<Slot | null>(null);
 
   const openRef = useRef<Open | null>(null);
   const latestXml = useRef('');
@@ -56,6 +59,7 @@ export function App() {
   const setOpen = (o: Open | null) => {
     openRef.current = o;
     setOpenState(o);
+    setSlot((s) => nextSlot(s, o));
   };
 
   const fail = (what: string, e?: unknown) =>
@@ -83,6 +87,22 @@ export function App() {
     void refresh();
     void checkMount();
   }, [refresh, checkMount]);
+
+  // Warm-up, once the list is on screen and the browser is idle (never competing with the shell):
+  // prefetch draw.io's files once, then boot a hidden spare editor while the pane is empty, so the
+  // next file opened lands in an editor that has already started. Skipped on Save-Data.
+  const listShown = !loading;
+  // With a file already open its frame is fetching these files itself; a prefetch would only race it.
+  useEffect(() => {
+    if (!listShown || mount.status !== 'mounted' || open || !warmupAllowed()) return;
+    return whenIdle(() => {
+      if (!openRef.current) prefetchDrawio();
+    });
+  }, [listShown, mount.status, open]);
+  useEffect(() => {
+    if (!listShown || mount.status !== 'mounted' || open || slot || !warmupAllowed()) return;
+    return whenIdle(() => setSlot((s) => (s || openRef.current ? s : newSpare())));
+  }, [listShown, mount.status, open, slot]);
 
   // Light / Dark are fixed; System follows the OS, live.
   useEffect(() => {
@@ -255,6 +275,7 @@ export function App() {
   const openEntry = async (e: Entry) => {
     const cur = openRef.current;
     if (cur?.id === e.id) return;
+    beginOpen(titleOf(e));
     const saved = await flush();
     if (
       !saved &&
@@ -289,6 +310,7 @@ export function App() {
     const title = clampTitle(want);
     const id = entryId(name, folder);
     const xml = blankXml();
+    beginOpen(title);
     const tok = ++token.current;
     latestXml.current = xml;
     savedXml.current = '';
@@ -551,17 +573,14 @@ export function App() {
 
   /* ---------------------------------------------------------------------- render */
 
-  let main;
-  if (mount.status === 'missing') {
-    main = <EditorPlaceholder reason={mount.reason} onRetry={() => void checkMount()} />;
-  } else if (mount.status === 'probing') {
-    main = <div className="sw-empty-main" role="status">Looking for the draw.io editor…</div>;
-  } else if (open) {
-    main = (
+  // The frame is rendered on its own, beside the overlays, so a spare survives the empty state being
+  // replaced by an open file (same key = same iframe, no reload).
+  const frameFile = open && slot?.token === open.token ? { token: open.token, name: titleOf(open), xml: open.xml } : null;
+  const frame =
+    mount.status === 'mounted' && slot && (slot.token === null || frameFile) ? (
       <DrawioEditor
-        key={open.token}
-        name={titleOf(open)}
-        xml={open.xml}
+        key={slot.key}
+        file={frameFile}
         linkRef={linkRef}
         onChange={onChange}
         onExit={() => {
@@ -572,7 +591,15 @@ export function App() {
           setMount({ status: 'missing', reason: `the editor page loaded but did not start within ${INIT_TIMEOUT_MS / 1000} seconds` })
         }
       />
-    );
+    ) : null;
+
+  let main;
+  if (mount.status === 'missing') {
+    main = <EditorPlaceholder reason={mount.reason} onRetry={() => void checkMount()} />;
+  } else if (mount.status === 'probing') {
+    main = <div className="sw-empty-main" role="status">Looking for the draw.io editor…</div>;
+  } else if (open) {
+    main = null;
   } else {
     main = (
       <div className="sw-empty-main">
@@ -671,7 +698,10 @@ export function App() {
               {!open ? 'Save' : save.state === 'saving' ? 'Saving…' : save.state === 'saved' && save.at ? `Saved ${when(save.at)}` : 'Save'}
             </button>
           </div>
-          <div className="sw-stage">{main}</div>
+          <div className="sw-stage">
+            {frame}
+            {main}
+          </div>
         </main>
       </div>
       <section className="print-sheet" aria-hidden="true">

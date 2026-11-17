@@ -4,3 +4,5 @@ dist/
 run.err
 run.json
 test/out/client-bundle.mjs
+test/.drawio/
+test/out/perf-*.json
