@@ -125,6 +125,6 @@
   .print-sheet img { display: block; max-width: 100%; height: auto; page-break-inside: avoid; }
 }
 
-.sw-frame-wrap { position: relative; display: flex; flex: 1 1 auto; min-height: 0; }
+.sw-frame-wrap { position: absolute; inset: 0; display: flex; }
 .sw-loading { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; font-size: 13px; color: var(--ink-2); pointer-events: none; }
 .sw-loading span { font-size: 12px; opacity: .75; }
