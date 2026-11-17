@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { connectDrawio, DRAWIO_SRC, INIT_TIMEOUT_MS, type DrawioLink } from '../lib/drawioProtocol';
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
 /** Full-bleed draw.io iframe. Remounted (via `key`) for every file that is opened. */
 export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const [ready, setReady] = useState(false);
   const latest = useRef({ name, xml, onChange, onExit, onTimeout });
   latest.current = { name, xml, onChange, onExit, onTimeout };
 
@@ -24,6 +25,7 @@ export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }
     const link = connectDrawio(el, {
       onInit: () => {
         window.clearTimeout(timer);
+        setReady(true);
         return latest.current.xml;
       },
       title: () => latest.current.name,
@@ -55,10 +57,20 @@ export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }
     };
   }, [linkRef]);
 
-  return <iframe ref={frame} className="sw-frame" src={DRAWIO_SRC} title={`draw.io editor: ${name}`} />;
+  return (
+    <div className="sw-frame-wrap">
+      {!ready && (
+        <div className="sw-loading" role="status">
+          Loading the drawing editor…
+          <span>The first load of a new session takes a few seconds.</span>
+        </div>
+      )}
+      <iframe ref={frame} className="sw-frame" src={DRAWIO_SRC} title={`draw.io editor: ${name}`} />
+    </div>
+  );
 }
 
-/** Shown when /drawio/ is missing (404, SPA fallback) or loaded but sent no init within 8 s of `load`. */
+/** Shown when /drawio/ is missing (404, SPA fallback) or loaded but never sent `init`. */
 export function EditorPlaceholder({ reason, onRetry }: { reason: string | null; onRetry(): void }) {
   return (
     <div className="sw-placeholder" role="status">
