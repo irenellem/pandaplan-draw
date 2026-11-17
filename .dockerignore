@@ -1,0 +1,8 @@
+node_modules
+dist
+docs
+run.json
+run.err
+.claude
+BRIEF.md
+*.log
