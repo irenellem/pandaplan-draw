@@ -1,0 +1,138 @@
+TAP version 13
+# Subtest: PUT with no folder param stores an unfiled copy (day folder), listed with folder ""
+not ok 1 - PUT with no folder param stores an unfiled copy (day folder), listed with folder ""
+  ---
+  duration_ms: 28.955833
+  type: 'test'
+  location: '/Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:12:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'draws/workspace/plan.pandadraw'
+    - 'draws/2026-11-17/plan.pandadraw'
+             ^
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'draws/2026-11-17/plan.pandadraw'
+  actual: 'draws/workspace/plan.pandadraw'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:15:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: PUT keeps the title in customMetadata and the list returns it, exactly
+not ok 2 - PUT keeps the title in customMetadata and the list returns it, exactly
+  ---
+  duration_ms: 1.566583
+  type: 'test'
+  location: '/Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:20:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - 'PR# 123 – QC Report'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'PR# 123 – QC Report'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:25:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: a title never reaches the key, and is clamped to 120 characters (code points)
+not ok 3 - a title never reaches the key, and is clamped to 120 characters (code points)
+  ---
+  duration_ms: 1.276166
+  type: 'test'
+  location: '/Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:32:1'
+  failureType: 'testCodeFailure'
+  error: 't is not iterable'
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:38:20)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: the list says when it is cut at 400 items
+not ok 4 - the list says when it is cut at 400 items
+  ---
+  duration_ms: 7.727041
+  type: 'test'
+  location: '/Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:42:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:48:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: DELETE with folder="" removes only the unfiled copies of that name
+not ok 5 - DELETE with folder="" removes only the unfiled copies of that name
+  ---
+  duration_ms: 1.109584
+  type: 'test'
+  location: '/Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:51:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    undefined !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:57:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: DELETE with a folder removes only that folder; with no folder param, every copy (old contract)
+not ok 6 - DELETE with a folder removes only that folder; with no folder param, every copy (old contract)
+  ---
+  duration_ms: 3.064458
+  type: 'test'
+  location: '/Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:61:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    undefined !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///Users/irenellemedalla/Downloads/Gantt_Preview/draw/test/worker.test.mjs:69:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 0
+# fail 6
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 137.812125

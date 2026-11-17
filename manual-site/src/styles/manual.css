@@ -1,0 +1,53 @@
+/* PandaPlan Draw manual — same palette and type as the app, so the two read as one product. */
+:root {
+  --sl-color-accent-low: #d8e8fe;
+  --sl-color-accent: #1877f2;
+  --sl-color-accent-high: #0b4ea2;
+  --sl-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --sl-font-system-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sl-text-5xl: 2rem;
+}
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #10294a;
+  --sl-color-accent: #59a3ff;
+  --sl-color-accent-high: #cfe3ff;
+}
+.site-title { font-weight: 700; letter-spacing: -0.01em; }
+
+/* One page, no side navigation: hide the empty column so the manual uses the full width.
+   --sl-sidebar-width feeds BOTH the left column and the table-of-contents rail, so it is left alone;
+   the frame's two remaining tracks (page + contents) are set explicitly instead. */
+nav.sidebar { display: none !important; }
+@media (min-width: 72rem) {
+  .main-frame { grid-template-columns: minmax(0, 1fr) 18.75rem !important; }
+  .main-pane { padding-left: 2rem; }
+  .sl-container { max-width: 52rem; }
+}
+
+.sl-markdown-content h2 { margin-top: 2.25rem; padding-top: 0.75rem; border-top: 1px solid var(--sl-color-hairline); }
+.sl-markdown-content h2:first-of-type { border-top: 0; padding-top: 0; }
+.sl-markdown-content table { font-size: var(--sl-text-sm); }
+.sl-markdown-content kbd {
+  font-family: var(--sl-font-system-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--sl-color-hairline);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--sl-color-bg-nav);
+  white-space: nowrap;
+}
+.lead { font-size: var(--sl-text-lg); color: var(--sl-color-gray-2); }
+.note {
+  border-left: 3px solid var(--sl-color-accent);
+  padding: 0.6rem 0.9rem;
+  margin: 1rem 0;
+  background: var(--sl-color-bg-nav);
+  border-radius: 0 6px 6px 0;
+}
+@media print {
+  header.header, nav.sidebar, .right-sidebar, footer { display: none !important; }
+  .sl-markdown-content { max-width: none; }
+  main { padding: 0 !important; }
+}

@@ -1,0 +1,152 @@
+---
+title: PandaPlan Draw
+description: How to draw, save, rename, duplicate and print diagrams in PandaPlan Draw.
+head:
+  - tag: title
+    content: PandaPlan Draw — User Manual
+---
+
+<p class="lead">PandaPlan Draw is the diagram workspace at <strong>draw.pandaplan.work</strong>. The left side is
+your saved work. The right side is the drawing itself, and it saves as you go.</p>
+
+## 1. Signing in and opening it
+
+Open `draw.pandaplan.work` and sign in with your DTC account. There is no separate password for Draw —
+the same sign-in you use for the rest of PandaPlan covers it. The session expires after a while; when it
+does, the app says so plainly and offers Download so nothing is lost.
+
+## 2. The screen
+
+| Part | What it is |
+|---|---|
+| **Saved work** (left) | Every diagram you can open, grouped by date, plus your folders |
+| **Search** | Filters the list as you type — matches the title and the folder name |
+| **New diagram / New folder** | Starts a blank diagram, or a folder to put diagrams in |
+| **Action bar** | Open · Move to… · Rename · Duplicate · Delete, for whatever row is selected |
+| **File bar** (top right) | The open diagram's name, folder, Move to…, and the Save button |
+| **Edit · Draw.io** | The canvas toolbar: shapes, arrows, text, layers |
+| **Print / PDF · Download** (bottom left) | A printable sheet, or the `.drawio` file itself |
+
+On a phone you see one pane at a time. The folder takes the whole screen until you open a diagram, and
+**‹ Saved work** at the top left brings you back.
+
+## 3. Make a diagram
+
+1. Press **New diagram**.
+2. Type a name and press Enter. The diagram opens immediately.
+3. Draw. Use the shape panel on the left of the canvas — drag a shape in, or click it to drop it in the middle.
+4. It saves itself. Watch the Save button: **Saved 14:32** means the cloud has your latest work.
+
+While you type a name, the small line under the box tells you where the diagram will go: the folder you
+have selected, or no folder at all. Select a folder in the list first if you want it filed there.
+
+## 4. Naming: capitals, dashes, and your own words
+
+Names are shown exactly as you type them. `PR# 123 – QC Report` stays `PR# 123 – QC Report`; it is
+never lowercased or trimmed of its punctuation. Up to 120 characters.
+
+Under that, each diagram also has a short storage key (`pr-123-qc-report`). You never type it and you
+never see it — it exists so the file can live safely in cloud storage. You may see it in a downloaded
+file name; that is expected.
+
+**To rename:** select the row and press <kbd>F2</kbd>, or press the pencil in the action bar. Type the new
+name, then Enter. Escape cancels. Capitals, spaces, dashes and punctuation are all kept.
+
+:::caution
+Renaming does not change the drawing, and it does not break a link to it — the file is copied to the new
+name and the old one is removed. Nothing you drew is touched.
+:::
+
+## 5. Duplicate
+
+Select a diagram and press **Duplicate** in the action bar, or <kbd>⌘D</kbd> / <kbd>Ctrl+D</kbd> while a row
+is selected.
+
+You get a second diagram named `<original> copy` in the same folder, with the same drawing. The original
+is left exactly as it was. Open the copy and rename it — that is the normal way to start next month's
+version of a diagram without redrawing it.
+
+If the original is the diagram you have open, the duplicate is taken from what is on screen, pending
+changes included.
+
+## 6. Autosave, and the Save button
+
+- Every change is saved about two seconds after you stop moving things. There is no Save step to forget.
+- The Save button shows the state: **Unsaved changes…** → **Saving…** → **Saved 14:32**, or a plain
+  sentence if something failed.
+- Pressing **Save** only skips the two-second wait. It never creates a second copy or a second version.
+- Switching diagrams, switching tabs, locking the phone or closing the window all push the last changes
+  out first.
+- If the cloud refuses a save, the app says so and keeps your drawing on screen. Download still works —
+  take a copy, then tell the PandaPlan admin.
+
+## 7. Folders
+
+- **New folder** makes one. A folder exists as soon as you name it, even before it holds anything.
+- **Move to…** moves the selected diagram into a folder. The diagram is written to the folder, then the
+  old copy is removed, so one diagram never appears twice.
+- **Rename folder** renames the folder and moves its diagrams with it.
+- **Delete folder** deletes the folder *and every diagram inside it*. You are asked to confirm, with the
+  count, before anything happens.
+
+Diagrams not in a folder are grouped by date: **Today**, **This week**, **Earlier**.
+
+## 8. Print and PDF
+
+**Print / PDF** exports the open diagram and opens the browser's print sheet. Choose *Save as PDF* there
+to get a PDF. No prices, no chrome, just the drawing on one sheet.
+
+Press <kbd>⌘P</kbd> / <kbd>Ctrl+P</kbd> for the same thing. If the export fails, the sheet says so in plain
+words instead of printing a blank page.
+
+To send a diagram to someone, use Print / PDF, save it, and attach the PDF to your email. Draw does not
+send mail by itself.
+
+## 9. Download
+
+**Download** saves the `.drawio` file to your device. It is the editable file, not a picture: it opens in
+draw.io, in the desktop app, or back here through Import. Use it when you want a copy you hold yourself.
+
+## 10. Delete
+
+**Delete** removes the diagram and **every saved version of it**, from cloud storage, for everyone. It
+cannot be undone. It asks first, by name.
+
+If the diagram is open it is closed first, so an autosave cannot put it straight back.
+
+## 11. Light and dark
+
+The button at the top of the folder (**Light · Dark · System**) switches the screen. **System** follows
+the device and keeps following it if the device changes at sunset. Your choice is remembered on that
+device.
+
+## 12. Keyboard
+
+| Key | Does |
+|---|---|
+| <kbd>↑</kbd> <kbd>↓</kbd> | Move through the saved work list |
+| <kbd>→</kbd> <kbd>←</kbd> | Open or close a folder or date group |
+| <kbd>Enter</kbd> | Open the selected diagram (or fold a group) |
+| <kbd>F2</kbd> | Rename the selected diagram or folder |
+| <kbd>Del</kbd> | Delete the selected diagram or folder |
+| <kbd>⌘D</kbd> / <kbd>Ctrl+D</kbd> | Duplicate the selected diagram |
+| <kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd> | Save now, inside the drawing |
+| <kbd>⌘P</kbd> / <kbd>Ctrl+P</kbd> | Print / PDF |
+| <kbd>Esc</kbd> | Cancel a rename or a new name |
+
+## 13. When something looks wrong
+
+| What you see | What it means | What to do |
+|---|---|---|
+| *The drawing editor did not load* | The editor files did not arrive | Press **Check again**. If it repeats, reload the page |
+| *Your sign-in has expired* | The session ran out | Download a copy if you have unsaved work, then reload and sign in |
+| *Could not reach the cloud storage* | No connection, or it timed out | Check the connection and press Save again. Nothing is lost meanwhile |
+| A diagram is missing from the list | It may be in a folder you closed, or in another browser's old entry | Open the folders, clear the search box, press **Refresh** |
+| Two diagrams with almost the same name | A rename happened on another device | Open each and delete the one you do not want |
+
+Anything else: send the exact wording on screen to the PandaPlan admin. It is written to be quoted.
+
+---
+
+*PandaPlan Draw — Technical Department, Dairy Technologies Corporation. This manual is a page of the same
+application it documents; it is updated with it.*

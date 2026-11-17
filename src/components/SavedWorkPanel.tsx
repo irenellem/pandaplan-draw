@@ -1,7 +1,9 @@
 import {
+  BookOpen,
   CalendarDays,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   FileText,
   Folder,
@@ -19,7 +21,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { pretty, type Entry } from '../lib/savedWork';
+import { pretty, titleOf, type Entry, type Truncated } from '../lib/savedWork';
 import type { ThemeChoice } from '../lib/theme';
 
 export type SaveState = { state: 'idle' | 'pending' | 'saving' | 'saved' | 'error'; at?: string; error?: string };
@@ -37,8 +39,12 @@ interface Props {
   onOpen(e: Entry): void;
   /** Resolves to the new file's id. `folder` "" = no folder. */
   onNew(name: string, folder?: string): Promise<string>;
-  /** Resolves to the file's id after the rename, or null when it failed (the app reports why). */
-  onRename(e: Entry, name: string): Promise<string | null>;
+  /** `text` is the new title exactly as typed. Resolves to the file's id afterwards, or null when it failed (the app reports why). */
+  onRename(e: Entry, text: string): Promise<string | null>;
+  /** Resolves to the copy's id, or null when it failed (the app reports why). */
+  onDuplicate(e: Entry): Promise<string | null>;
+  /** The Worker listed only the newest `shown` of `total` saved copies. */
+  truncated: Truncated;
   onDelete(e: Entry): boolean;
   /** Resolves to the file's new id, or null when it failed. `folder` "" = no folder. */
   onMove(e: Entry, folder: string): Promise<string | null>;
@@ -173,7 +179,7 @@ export function SavedWorkPanel(p: Props) {
   const rows = useMemo<Row[]>(() => {
     const q = query.trim().toLowerCase();
     const match = (s: string) => s.toLowerCase().includes(q) || pretty(s).toLowerCase().includes(q);
-    const hits = p.entries.filter((e) => !q || match(e.name));
+    const hits = p.entries.filter((e) => !q || match(e.name) || titleOf(e).toLowerCase().includes(q));
     const out: Row[] = [];
     // Folders first, each with its own diagrams (newest first).
     for (const f of p.folders) {
@@ -213,22 +219,25 @@ export function SavedWorkPanel(p: Props) {
   }, [p.activeId, focusId]);
 
   const renameDone = useRef(false);
-  /** `id` is the row id: `f:<entry id>` or `d:<folder>`. */
-  const startRename = (id: string, current: string) => {
+  const renameFrom = useRef('');
+  /** `id` is the row id: `f:<entry id>` or `d:<folder>`. `label` is what the input starts with. */
+  const startRename = (id: string, label: string) => {
     renameDone.current = false;
-    setDraft(pretty(current));
+    renameFrom.current = label;
+    setDraft(label);
     setRenaming(id);
   };
 
+  /** Files take free text: the app keeps it as the title (capitals, punctuation) and derives the slug. */
   const commitRename = async (e: Entry) => {
     if (renameDone.current) return; // Enter then blur-on-unmount must not commit twice
     renameDone.current = true;
-    const name = draft.trim();
+    const text = draft;
     setRenaming(null);
-    if (!name || name === pretty(e.name)) return focusRow(`f:${e.id}`);
+    if (!text.trim() || text === renameFrom.current) return focusRow(`f:${e.id}`);
     setBusy(true);
     try {
-      const id = await p.onRename(e, name);
+      const id = await p.onRename(e, text);
       focusRow(`f:${id ?? e.id}`);
     } finally {
       setBusy(false);
@@ -281,11 +290,30 @@ export function SavedWorkPanel(p: Props) {
     else searchRef.current?.focus();
   };
 
+  /** Duplicate, then select the copy (it is not opened). */
+  const duplicateEntry = async (e: Entry) => {
+    setBusy(true);
+    try {
+      const id = await p.onDuplicate(e);
+      if (id) {
+        if (e.folder) setCollapsed((c) => ({ ...c, [`d:${e.folder}`]: false }));
+        focusRow(`f:${id}`);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onTreeKey = (ev: KeyboardEvent<HTMLUListElement>) => {
     if (renaming || /^(INPUT|SELECT)$/.test((ev.target as HTMLElement).tagName)) return;
     const i = Math.max(0, current);
     const row = rows[i];
     if (!row) return;
+    if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === 'd') {
+      ev.preventDefault(); // the browser's "bookmark this page"
+      if (row.kind === 'file' && !busy) void duplicateEntry(row.entry);
+      return;
+    }
     const move = (n: number) => {
       ev.preventDefault();
       // Hint rows ("Empty…") are text, not stops: step over them in the direction of travel.
@@ -337,8 +365,8 @@ export function SavedWorkPanel(p: Props) {
       case 'F2':
         if (row.kind === 'file' || row.kind === 'folder') {
           ev.preventDefault();
-          if (row.kind === 'file') startRename(rowId(row), row.entry.name);
-          else startRename(rowId(row), row.folder);
+          if (row.kind === 'file') startRename(rowId(row), titleOf(row.entry));
+          else startRename(rowId(row), pretty(row.folder));
         }
         return;
       case 'Delete':
@@ -445,9 +473,19 @@ export function SavedWorkPanel(p: Props) {
           title="Rename selected (F2)"
           aria-label="Rename selected"
           disabled={(!focusedFile && !focusedFolder) || busy}
-          onClick={() => focusedRow && (focusedFile ? startRename(rowId(focusedRow), focusedFile.name) : focusedFolder && startRename(rowId(focusedRow), focusedFolder))}
+          onClick={() => focusedRow && (focusedFile ? startRename(rowId(focusedRow), titleOf(focusedFile)) : focusedFolder && startRename(rowId(focusedRow), pretty(focusedFolder)))}
         >
           <Pencil size={14} />
+        </button>
+        <button
+          type="button"
+          className="iconbtn"
+          title="Duplicate selected (Ctrl+D / ⌘D)"
+          aria-label="Duplicate selected"
+          disabled={!focusedFile || busy}
+          onClick={() => focusedFile && void duplicateEntry(focusedFile)}
+        >
+          <Copy size={14} />
         </button>
         <button
           type="button"
@@ -496,6 +534,12 @@ export function SavedWorkPanel(p: Props) {
             </small>
           )}
         </form>
+      )}
+
+      {p.truncated && (
+        <p className="sw-truncated" role="status">
+          Showing {p.truncated.shown} of {p.truncated.total} saved copies, newest first. Older ones are not listed; search finds only listed ones.
+        </p>
       )}
 
       {p.error && (
@@ -617,7 +661,7 @@ export function SavedWorkPanel(p: Props) {
                 <input
                   className="sw-rename"
                   autoFocus
-                  aria-label={`Rename ${pretty(e.name)}`}
+                  aria-label={`Rename ${titleOf(e)}`}
                   value={draft}
                   onChange={(ev) => setDraft(ev.target.value)}
                   onKeyDown={(ev) => {
@@ -634,12 +678,26 @@ export function SavedWorkPanel(p: Props) {
               ) : (
                 <>
                   <span className="sw-name">
-                    <strong>{pretty(e.name)}</strong>
+                    <strong>{titleOf(e)}</strong>
                     <small>
                       {when(e.updated)} · {size(e.size)}
                       {e.source === 'browser' ? ' · this browser' : e.versions > 1 ? ` · ${e.versions} versions` : ''}
                     </small>
                   </span>
+                  <button
+                    type="button"
+                    className="iconbtn plain sw-row-move sw-row-dup"
+                    title="Duplicate (Ctrl+D / ⌘D)"
+                    aria-label={`Duplicate ${titleOf(e)}`}
+                    disabled={busy}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      void duplicateEntry(e);
+                    }}
+                    onDoubleClick={(ev) => ev.stopPropagation()}
+                  >
+                    <Copy size={13} aria-hidden />
+                  </button>
                   <MoveSelect className="sw-row-move" folders={p.folders} current={e.folder} disabled={busy} onPick={(f) => void moveTo(e, f)} />
                 </>
               )}
@@ -659,8 +717,11 @@ export function SavedWorkPanel(p: Props) {
           <button type="button" className="btn sm" disabled={!p.activeId} onClick={p.onDownload} title="Download a copy to this device (opens in draw.io)">
             <Download size={14} /> Download
           </button>
+          <a className="btn sm" href="/manual/" target="_blank" rel="noreferrer" title="User manual (opens in a new tab)">
+            <BookOpen size={14} /> Manual
+          </a>
         </div>
-        <p className="sw-keys">↑↓ select · Enter open · F2 rename · Del delete · ←→ fold</p>
+        <p className="sw-keys">↑↓ select · Enter open · F2 rename · Ctrl/⌘+D duplicate · Del delete · ←→ fold</p>
       </footer>
     </aside>
   );

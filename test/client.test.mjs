@@ -1,0 +1,130 @@
+// node --test test/client.test.mjs
+// The app's own src/ modules (bundled with the esbuild vite already ships), with `fetch` routed to the
+// real Worker over an in-memory R2 (test/stub.mjs). No browser: the React panel is rendered to HTML.
+import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
+import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
+import { env, handle } from './stub.mjs';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const outfile = `${root}test/out/client-bundle.mjs`;
+mkdirSync(`${root}test/out`, { recursive: true });
+await build({
+  stdin: {
+    contents: `
+      export * from './src/lib/savedWork';
+      export { slugify, makeFile } from './src/lib/drawioFile';
+      export { titleFilename } from './src/lib/download';
+      export { runSelfTest } from './src/lib/selftest';
+      export { SavedWorkPanel } from './src/components/SavedWorkPanel';
+      export { createElement } from 'react';
+      export { renderToStaticMarkup } from 'react-dom/server';`,
+    resolveDir: root,
+    loader: 'ts',
+  },
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  jsx: 'automatic',
+  packages: 'external', // react, react-dom, lucide-react from node_modules
+  outfile,
+  logLevel: 'error',
+});
+
+// Browser globals the modules touch.
+const store = new Map();
+globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+const requests = [];
+globalThis.fetch = async (url, init = {}) => {
+  requests.push({ method: init.method || 'GET', url: String(url) });
+  const r = await handle(init.method || 'GET', String(url), init.headers || {}, init.body === undefined ? undefined : Buffer.from(init.body));
+  return new Response(r.status === 204 ? null : r.body, { status: r.status, headers: r.headers });
+};
+
+const m = await import(pathToFileURL(outfile).href);
+const TITLE = 'PR# 123 – QC Report';
+const xml = '<mxfile host="t"><diagram id="d" name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>';
+
+test('before: the old display path turned the typed name into "Pr 123 qc report"', () => {
+  // HEAD rendered pretty(slug) for every name; slugify/pretty are unchanged, so this is that output.
+  assert.equal(m.pretty(m.slugify(TITLE)), 'Pr 123 qc report');
+});
+
+test('saveXml sends &title= and the payload carries it; a fresh list (a reload) shows it exactly', async () => {
+  env.BACKUPS.objects.clear();
+  const name = m.uniqueSlug(TITLE, []);
+  await m.saveXml(name, '', xml, TITLE);
+  const put = requests.findLast((r) => r.method === 'PUT');
+  assert.ok(put.url.includes(`&title=${encodeURIComponent(TITLE)}`), put.url);
+  const [stored] = [...env.BACKUPS.objects.values()];
+  assert.equal(JSON.parse(stored.body).title, TITLE);
+  assert.equal(stored.customMetadata.title, TITLE);
+  const { entries, error } = await m.listEntries();
+  assert.equal(error, null);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].title, TITLE);
+  assert.equal(entries[0].folder, '');
+  assert.equal(m.titleOf(entries[0]), TITLE);
+  assert.equal(await m.readXml(entries[0]), xml);
+});
+
+test('a copy gets "<title> copy" and its own key', async () => {
+  const { entries } = await m.listEntries();
+  const title = m.clampTitle(`${m.titleOf(entries[0])} copy`);
+  const name = m.uniqueSlug(title, entries.map((e) => e.name));
+  await m.saveXml(name, entries[0].folder, await m.readXml(entries[0]), title);
+  const after = (await m.listEntries()).entries;
+  assert.deepEqual(after.map((e) => e.title).sort(), [TITLE, `${TITLE} copy`].sort());
+  assert.equal(new Set(after.map((e) => e.key)).size, 2);
+});
+
+test('deleteEntry for an unfiled file never touches the same name in a folder', async () => {
+  env.BACKUPS.objects.clear();
+  await m.saveXml('plan', '', xml, 'Plan');
+  await m.saveXml('plan', 'team', xml, 'Plan (team)');
+  await m.deleteEntry('plan', '');
+  assert.ok(requests.findLast((r) => r.method === 'DELETE').url.includes('&folder='));
+  assert.deepEqual([...env.BACKUPS.objects.keys()], ['draws/team/plan.pandadraw']);
+});
+
+test('a list cut at 400 is reported as truncated', async () => {
+  env.BACKUPS.objects.clear();
+  await handle('POST', '/__stub/seed', {}, Buffer.from(JSON.stringify({ count: 420 })));
+  const r = await m.listEntries();
+  assert.deepEqual(r.truncated, { shown: 400, total: 420 });
+});
+
+test('old files without a title fall back to pretty(slug)', async () => {
+  env.BACKUPS.objects.clear();
+  await env.BACKUPS.put('draws/2026-01-02/q4-roadmap.pandadraw', JSON.stringify({ kind: 'drawio', version: 1, name: 'q4-roadmap', xml, updatedAt: '' }));
+  const [e] = (await m.listEntries()).entries;
+  assert.equal(e.title, '');
+  assert.equal(m.titleOf(e), 'Q4 roadmap');
+});
+
+test('the panel renders titles exactly, the Duplicate action and the truncation notice', () => {
+  const entry = (name, title, folder = '') => ({ id: folder ? `${folder}/${name}` : name, name, title, folder, source: 'cloud', key: `draws/x/${name}.pandadraw`, size: 900, updated: new Date().toISOString(), versions: 1 });
+  const html = m.renderToStaticMarkup(
+    m.createElement(m.SavedWorkPanel, {
+      entries: [entry('pr-123-qc-report', TITLE), entry('pr-123-qc-report-copy', `${TITLE} copy`), entry('q4-roadmap', '')],
+      loading: false, error: null, activeId: null, save: { state: 'idle' }, folders: [], theme: 'light',
+      truncated: { shown: 400, total: 431 },
+      onTheme() {}, onOpen() {}, onNew: async () => '', onRename: async () => null, onDuplicate: async () => null, onDelete: () => false,
+      onMove: async () => null, onNewFolder: () => '', onRenameFolder: async () => null, onDeleteFolder: () => false,
+      onRefresh() {}, onPrint() {}, onDownload() {},
+    }),
+  );
+  const rows = [...html.matchAll(/<span class="sw-name"><strong>([^<]*)<\/strong>/g)].map((x) => x[1]);
+  assert.deepEqual(rows, [TITLE, `${TITLE} copy`, 'Q4 roadmap']);
+  assert.match(html, /aria-label="Duplicate selected"/);
+  assert.match(html, /aria-label="Duplicate PR# 123 – QC Report"/);
+  assert.match(html, /Showing 400 of 431 saved copies/);
+});
+
+test('?selftest=1 diagnostics are all ok and JSON-serialisable', () => {
+  const r = JSON.parse(JSON.stringify(m.runSelfTest('0.1.0', '/')));
+  assert.equal(r.ok, true, JSON.stringify(r.checks.filter((c) => !c.ok)));
+  assert.ok(r.checks.length >= 8);
+});

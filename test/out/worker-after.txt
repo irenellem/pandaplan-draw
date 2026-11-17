@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: PUT with no folder param stores an unfiled copy (day folder), listed with folder ""
+ok 1 - PUT with no folder param stores an unfiled copy (day folder), listed with folder ""
+  ---
+  duration_ms: 25.905917
+  type: 'test'
+  ...
+# Subtest: PUT keeps the title in customMetadata and the list returns it, exactly
+ok 2 - PUT keeps the title in customMetadata and the list returns it, exactly
+  ---
+  duration_ms: 2.848916
+  type: 'test'
+  ...
+# Subtest: a title never reaches the key, and is clamped to 120 characters (code points)
+ok 3 - a title never reaches the key, and is clamped to 120 characters (code points)
+  ---
+  duration_ms: 1.0195
+  type: 'test'
+  ...
+# Subtest: the list says when it is cut at 400 items
+ok 4 - the list says when it is cut at 400 items
+  ---
+  duration_ms: 6.471667
+  type: 'test'
+  ...
+# Subtest: DELETE with folder="" removes only the unfiled copies of that name
+ok 5 - DELETE with folder="" removes only the unfiled copies of that name
+  ---
+  duration_ms: 1.124916
+  type: 'test'
+  ...
+# Subtest: DELETE with a folder removes only that folder; with no folder param, every copy (old contract)
+ok 6 - DELETE with a folder removes only that folder; with no folder param, every copy (old contract)
+  ---
+  duration_ms: 1.607709
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 124.470041

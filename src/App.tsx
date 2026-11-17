@@ -4,8 +4,9 @@ import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
 import { MoveSelect, SavedWorkPanel, saveStatusText, when, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
-import { downloadText } from './lib/download';
+import { downloadText, titleFilename } from './lib/download';
 import {
+  clampTitle,
   deleteEntry,
   entryId,
   listEntries,
@@ -14,16 +15,19 @@ import {
   readXml,
   saveXml,
   setLocalFolders,
+  titleOf,
   tombstone,
   uniqueSlug,
   type Entry,
   type Source,
+  type Truncated,
 } from './lib/savedWork';
 import { applyTheme, nextTheme, readTheme, storeTheme, type ThemeChoice } from './lib/theme';
 
 const AUTOSAVE_MS = 2000;
 
-type Open = { id: string; name: string; folder: string; xml: string; token: number; source: Source };
+/** `name` is the slug (storage key); `title` the display title ("" = old file, shown via `pretty`). */
+type Open = { id: string; name: string; title: string; folder: string; xml: string; token: number; source: Source };
 type Mount = { status: 'probing' | 'mounted' | 'missing'; reason: string | null };
 
 /** Workspace: saved-work folder on the left, draw.io full-bleed on the right. */
@@ -31,6 +35,7 @@ export function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState<Truncated>(null);
   const [open, setOpenState] = useState<Open | null>(null);
   const [mount, setMount] = useState<Mount>({ status: 'probing', reason: null });
   const [save, setSave] = useState<SaveState>({ state: 'idle' });
@@ -61,8 +66,10 @@ export function App() {
   const refresh = useCallback(async () => {
     setLoading(true);
     const r = await listEntries();
+    entriesRef.current = r.entries;
     setEntries(r.entries);
     setListError(r.error);
+    setTruncated(r.truncated);
     setLoading(false);
   }, []);
 
@@ -111,11 +118,15 @@ export function App() {
     });
 
   useEffect(() => {
-    document.title = open ? `${pretty(open.name)} · PandaPlan Draw` : 'PandaPlan Draw';
+    document.title = open ? `${titleOf(open)} · PandaPlan Draw` : 'PandaPlan Draw';
   }, [open]);
 
-  const upsert = (e: Entry, removeId?: string) =>
-    setEntries((list) => [e, ...list.filter((x) => x.id !== e.id && x.id !== removeId)]);
+  /** Also updates `entriesRef` at once: the next queued job may run before React re-renders. */
+  const upsert = (e: Entry, removeId?: string) => {
+    const next = (list: Entry[]) => [e, ...list.filter((x) => x.id !== e.id && x.id !== removeId)];
+    entriesRef.current = next(entriesRef.current);
+    setEntries(next);
+  };
 
   /* ---------------------------------------------------------------------- saving */
 
@@ -147,7 +158,7 @@ export function App() {
         const cur = isOpen() ? openRef.current! : o;
         if (isOpen()) setSave({ state: 'saving' });
         try {
-          const res = await saveXml(cur.name, cur.folder, xml, keepalive);
+          const res = await saveXml(cur.name, cur.folder, xml, cur.title, keepalive);
           const id = entryId(cur.name, cur.folder);
           const stillListed = isOpen() || entriesRef.current.some((x) => x.id === cur.id);
           if (!stillListed) {
@@ -157,7 +168,7 @@ export function App() {
           if (cur.source === 'browser') tombstone(cur.id); // the browser-only copy now lives in R2
           const prev = entriesRef.current.find((x) => x.id === id);
           upsert(
-            { id, name: cur.name, folder: cur.folder, source: 'cloud', key: res.key ?? prev?.key, size: res.bytes, updated: res.updatedAt, versions: (prev?.versions ?? 0) + 1 },
+            { id, name: cur.name, title: cur.title, folder: cur.folder, source: 'cloud', key: res.key ?? prev?.key, size: res.bytes, updated: res.updatedAt, versions: (prev?.versions ?? 0) + 1 },
             cur.source === 'browser' ? cur.id : undefined,
           );
           if (!res.key) void refresh(); // Worker did not echo the key: re-list so Open fetches the newest copy
@@ -172,8 +183,9 @@ export function App() {
             fail('Not saved (your changes are still on screen)', e);
           } else if (entriesRef.current.some((x) => x.id === cur.id)) {
             // The editor has moved on: this XML exists nowhere else. Hand it to the user.
-            downloadText(xml, `${cur.name}.unsaved.drawio`, 'application/xml');
-            fail(`Could not save ${cur.name}; its last changes were offered as a download (${cur.name}.unsaved.drawio)`, e);
+            const file = titleFilename(titleOf(cur), '.unsaved.drawio');
+            downloadText(xml, file, 'application/xml');
+            fail(`Could not save "${titleOf(cur)}"; its last changes were offered as a download (${file})`, e);
           }
           return false;
         }
@@ -249,7 +261,7 @@ export function App() {
       cur &&
       openRef.current?.token === cur.token &&
       !window.confirm(
-        `"${pretty(cur.name)}" has changes that could not be saved to the cloud.\n\nOpen "${pretty(e.name)}" anyway and discard them?\n(Cancel keeps it open; the Download button saves a copy to this device.)`,
+        `"${titleOf(cur)}" has changes that could not be saved to the cloud.\n\nOpen "${titleOf(e)}" anyway and discard them?\n(Cancel keeps it open; the Download button saves a copy to this device.)`,
       )
     ) {
       return;
@@ -260,10 +272,10 @@ export function App() {
       const name = e.source === 'browser' ? uniqueSlug(e.name, cloud) : e.name;
       latestXml.current = xml;
       savedXml.current = xml;
-      setOpen({ id: e.id, name, folder: e.folder, xml, token: ++token.current, source: e.source });
+      setOpen({ id: e.id, name, title: e.title, folder: e.folder, xml, token: ++token.current, source: e.source });
       setSave({ state: 'idle' });
     } catch (err) {
-      fail(`Could not open ${pretty(e.name)}`, err);
+      fail(`Could not open "${titleOf(e)}"`, err);
     }
   };
 
@@ -274,18 +286,19 @@ export function App() {
     // The editor opens first and unconditionally: the save queue must never gate it.
     // Names stay unique across all folders, so a name alone never matches two files.
     const name = uniqueSlug(want, entriesRef.current.map((x) => x.name));
+    const title = clampTitle(want);
     const id = entryId(name, folder);
     const xml = blankXml();
     const tok = ++token.current;
     latestXml.current = xml;
     savedXml.current = '';
     setSave({ state: 'saving' });
-    setOpen({ id, name, folder, xml, token: tok, source: 'cloud' });
+    setOpen({ id, name, title, folder, xml, token: tok, source: 'cloud' });
     await enqueue(async () => {
       const isOpen = () => openRef.current?.token === tok;
       try {
-        const res = await saveXml(name, folder, xml);
-        upsert({ id, name, folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
+        const res = await saveXml(name, folder, xml, title);
+        upsert({ id, name, title, folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
         if (!res.key) void refresh();
         if (isOpen()) {
           savedXml.current = xml;
@@ -298,32 +311,44 @@ export function App() {
     return id;
   };
 
-  /** No rename route in the Worker: copy to the new slug, then tombstone the old one. Returns the new id. */
-  const rename = async (e: Entry, want: string): Promise<string | null> => {
-    const name = uniqueSlug(want, entriesRef.current.filter((x) => x.id !== e.id).map((x) => x.name));
-    if (name === e.name && e.source === 'cloud') return e.id;
-    const id = entryId(name, e.folder);
+  /**
+   * Rename to free text. The title keeps exactly what was typed (trimmed, max 120 characters); the slug
+   * (storage key) is derived from it. Same slug: re-save under the same key with the new title. New
+   * slug: no rename route in the Worker, so copy to the new slug, then delete the old one in its own
+   * folder only. Empty text cancels. Returns the file's id afterwards, or null when it failed.
+   */
+  const rename = async (e: Entry, text: string): Promise<string | null> => {
+    const title = clampTitle(text);
+    if (!title) return e.id;
+    const name = uniqueSlug(text, entriesRef.current.filter((x) => x.id !== e.id).map((x) => x.name));
+    const sameKey = name === e.name && e.source === 'cloud';
+    if (sameKey && title === e.title) return e.id;
+    const id = sameKey ? e.id : entryId(name, e.folder);
     if (openRef.current?.id === e.id) window.clearTimeout(timer.current); // pending edits go to the new name
     return enqueue(async () => {
       const o = openRef.current;
       const isOpen = o?.id === e.id;
       try {
         const xml = isOpen && latestXml.current ? latestXml.current : await readXml(e);
-        const res = await saveXml(name, e.folder, xml);
-        tombstone(e.id);
-        upsert({ id, name, folder: e.folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 }, e.id);
+        const res = await saveXml(name, e.folder, xml, title);
+        if (!sameKey) tombstone(e.id);
+        const prev = entriesRef.current.find((x) => x.id === e.id);
+        upsert(
+          { id, name, title, folder: e.folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: sameKey ? (prev?.versions ?? 0) + 1 : 1 },
+          e.id,
+        );
         if (!res.key) void refresh();
         if (isOpen && o && openRef.current?.token === o.token) {
           savedXml.current = xml;
-          setOpen({ ...openRef.current, id, name, source: 'cloud' });
+          setOpen({ ...openRef.current, id, name, title, source: 'cloud' });
           setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
           if (latestXml.current !== xml) void flush();
         }
         // The tombstone only hides the old name in this browser; without this the phone and every
         // other device keep showing it, so one rename leaves two files.
-        if (e.source === 'cloud') {
+        if (!sameKey && e.source === 'cloud') {
           await deleteEntry(e.name, e.folder).catch(() =>
-            fail(`Renamed to "${pretty(name)}", but the old name "${pretty(e.name)}" still shows on other devices. Delete it there`),
+            fail(`Renamed to "${title}", but the old name "${titleOf(e)}" still shows on other devices. Delete it there`),
           );
         }
         return id;
@@ -334,9 +359,36 @@ export function App() {
     });
   };
 
+  /**
+   * Duplicate as "<title> copy" in the same folder. On the save queue, so it never interleaves with an
+   * autosave PUT. The open file is copied from what is on screen, never from its older cloud copy.
+   * Returns the copy's id (it is not opened), or null when it failed (the reason is shown).
+   */
+  const duplicate = (e: Entry): Promise<string | null> =>
+    enqueue(async () => {
+      try {
+        const o = openRef.current;
+        const xml = o && o.id === e.id && latestXml.current ? latestXml.current : await readXml(e);
+        // "copy", then "copy 2", "copy 3"… so two copies never share a title in the list.
+        const base = titleOf(e).replace(/ copy( \d+)?$/, '');
+        const taken = new Set(entriesRef.current.map((x) => x.title));
+        let title = clampTitle(`${base} copy`);
+        for (let i = 2; taken.has(title) && i < 1000; i++) title = clampTitle(`${base} copy ${i}`);
+        const name = uniqueSlug(title, entriesRef.current.map((x) => x.name));
+        const id = entryId(name, e.folder);
+        const res = await saveXml(name, e.folder, xml, title);
+        upsert({ id, name, title, folder: e.folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
+        if (!res.key) void refresh();
+        return id;
+      } catch (err) {
+        fail(`Could not duplicate "${titleOf(e)}"`, err);
+        return null;
+      }
+    });
+
   const remove = (e: Entry): boolean => {
     const ok = window.confirm(
-      `Delete "${pretty(e.name)}"?\n\nThis deletes every saved version of it from cloud storage. It cannot be undone.`,
+      `Delete "${titleOf(e)}"?\n\nThis deletes every saved version of it from cloud storage. It cannot be undone.`,
     );
     if (!ok) return false;
     // Close it first: an open file keeps autosaving, and a save landing after the delete would
@@ -356,7 +408,7 @@ export function App() {
       void enqueue(() =>
         deleteEntry(e.name, e.folder).then(
           () => undefined,
-          (err) => fail(`"${pretty(e.name)}" is hidden here, but the cloud copy could not be deleted`, err),
+          (err) => fail(`"${titleOf(e)}" is hidden here, but the cloud copy could not be deleted`, err),
         ),
       );
     }
@@ -379,43 +431,20 @@ export function App() {
     const cloudNames = entriesRef.current.filter((x) => x.source === 'cloud').map((x) => x.name);
     const name = isOpen ? o.name : e.source === 'browser' ? uniqueSlug(e.name, cloudNames) : e.name;
     const id = entryId(name, folder);
-    let reported = false;
-    let xml: string;
+    const title = isOpen ? o.title : e.title;
     try {
-      xml = isOpen && latestXml.current ? latestXml.current : await readXml(e);
-    } catch (err) {
-      fail(`Could not move "${pretty(e.name)}"`, err);
-      return null;
-    }
-    try {
-      let res;
-      if (e.source === 'cloud' && !e.folder) {
-        // Unfiled copies have no folder to name in the DELETE, and a DELETE without one removes the name
-        // in every folder, the new copy too. So: delete first, then write; the XML is held here meanwhile.
-        await deleteEntry(e.name);
-        try {
-          res = await saveXml(name, folder, xml);
-        } catch (err) {
-          await saveXml(e.name, '', xml).catch(() => {
-            downloadText(xml, `${e.name}.drawio`, 'application/xml');
-            fail(`Could not move "${pretty(e.name)}" and could not put it back; it was offered as a download (${e.name}.drawio)`, err);
-            reported = true;
-          });
-          throw err;
-        }
-      } else {
-        res = await saveXml(name, folder, xml);
-        if (e.source === 'cloud') {
-          await deleteEntry(e.name, e.folder).catch(() =>
-            fail(`Moved "${pretty(e.name)}", but an old copy is still in its previous folder. Delete it there`),
-          );
-        }
+      const xml = isOpen && latestXml.current ? latestXml.current : await readXml(e);
+      // Write the new copy first, then delete the old one in ITS folder only (`folder=` = unfiled
+      // copies only), so the diagram is never held only in memory and the new copy is never hit.
+      const res = await saveXml(name, folder, xml, title);
+      if (e.source === 'cloud') {
+        await deleteEntry(e.name, e.folder).catch(() =>
+          fail(`Moved "${titleOf(e)}", but an old copy is still in its previous folder. Delete it there`),
+        );
       }
       tombstone(e.id);
       const prev = entriesRef.current.find((x) => x.id === e.id);
-      const moved: Entry = { id, name, folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: prev?.versions ?? 1 };
-      upsert(moved, e.id);
-      entriesRef.current = [moved, ...entriesRef.current.filter((x) => x.id !== id && x.id !== e.id)];
+      upsert({ id, name, title, folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: prev?.versions ?? 1 }, e.id);
       if (!res.key) void refresh();
       const now = openRef.current;
       if (isOpen && o && now?.token === o.token) {
@@ -426,7 +455,7 @@ export function App() {
       }
       return id;
     } catch (err) {
-      if (!reported) fail(`Could not move "${pretty(e.name)}"`, err);
+      fail(`Could not move "${titleOf(e)}"`, err);
       return null;
     }
   };
@@ -474,7 +503,7 @@ export function App() {
       void enqueue(() =>
         deleteEntry(e.name, folder).then(
           () => undefined,
-          (err) => fail(`"${pretty(e.name)}" is hidden here, but the cloud copy could not be deleted`, err),
+          (err) => fail(`"${titleOf(e)}" is hidden here, but the cloud copy could not be deleted`, err),
         ),
       );
     }
@@ -517,7 +546,7 @@ export function App() {
 
   const download = () => {
     const o = openRef.current;
-    if (o) downloadText(latestXml.current || o.xml, `${o.name}.drawio`, 'application/xml');
+    if (o) downloadText(latestXml.current || o.xml, titleFilename(titleOf(o), '.drawio', o.name), 'application/xml');
   };
 
   /* ---------------------------------------------------------------------- render */
@@ -531,7 +560,7 @@ export function App() {
     main = (
       <DrawioEditor
         key={open.token}
-        name={open.name}
+        name={titleOf(open)}
         xml={open.xml}
         linkRef={linkRef}
         onChange={onChange}
@@ -549,7 +578,7 @@ export function App() {
       <div className="sw-empty-main">
         <strong>No diagram open</strong>
         <span>Pick a diagram in the saved-work folder, or start a new one.</span>
-        <button type="button" className="btn primary" onClick={() => void newDiagram('untitled')}>
+        <button type="button" className="btn primary" onClick={() => void newDiagram('Untitled')}>
           <FilePlus2 size={15} /> New diagram
         </button>
       </div>
@@ -571,6 +600,8 @@ export function App() {
           onOpen={(e) => void openEntry(e)}
           onNew={newDiagram}
           onRename={rename}
+          onDuplicate={duplicate}
+          truncated={truncated}
           onDelete={remove}
           onMove={move}
           onNewFolder={newFolder}
@@ -604,7 +635,7 @@ export function App() {
                       <Folder size={13} aria-hidden /> {pretty(open.folder)} /
                     </span>
                   )}
-                  <strong>{pretty(open.name)}</strong>
+                  <strong>{titleOf(open)}</strong>
                 </>
               ) : (
                 <span className="sw-filebar-none">No diagram open</span>
@@ -644,7 +675,7 @@ export function App() {
         </main>
       </div>
       <section className="print-sheet" aria-hidden="true">
-        <h1>{open?.name ?? 'PandaPlan Draw'}</h1>
+        <h1>{open ? titleOf(open) : 'PandaPlan Draw'}</h1>
         {printImg ? (
           <img src={printImg} alt="" />
         ) : open ? (

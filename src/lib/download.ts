@@ -24,6 +24,24 @@ export async function downloadDataUrl(dataUrl: string, filename: string): Promis
   downloadBlob(new Blob([bytes], { type: mime }), filename);
 }
 
+/**
+ * A download name from a display title: keeps capitals, spaces and Unicode punctuation, drops only
+ * what a filesystem rejects (/ \ : * ? " < > | and control characters) and leading dots.
+ */
+export function titleFilename(title: string, ext: string, fallback = 'diagram'): string {
+  const s = Array.from(
+    title
+      .replace(/[/\\:*?"<>|\u0000-\u001f\u007f]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^\.+/, ''),
+  )
+    .slice(0, 120)
+    .join('')
+    .trim();
+  return `${s || fallback}${ext}`;
+}
+
 export function safeFilename(name: string, fallback = 'diagram'): string {
   const s = name.trim().replace(/[^\w\- .]+/g, '').replace(/\s+/g, '-').slice(0, 80);
   return s || fallback;

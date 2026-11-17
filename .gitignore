@@ -3,3 +3,4 @@ dist/
 *.tsbuildinfo
 run.err
 run.json
+test/out/client-bundle.mjs

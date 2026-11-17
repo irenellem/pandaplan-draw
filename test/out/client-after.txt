@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: before: the old display path turned the typed name into "Pr 123 qc report"
+ok 1 - before: the old display path turned the typed name into "Pr 123 qc report"
+  ---
+  duration_ms: 1.008458
+  type: 'test'
+  ...
+# Subtest: saveXml sends &title= and the payload carries it; a fresh list (a reload) shows it exactly
+ok 2 - saveXml sends &title= and the payload carries it; a fresh list (a reload) shows it exactly
+  ---
+  duration_ms: 25.541917
+  type: 'test'
+  ...
+# Subtest: a copy gets "<title> copy" and its own key
+ok 3 - a copy gets "<title> copy" and its own key
+  ---
+  duration_ms: 5.632833
+  type: 'test'
+  ...
+# Subtest: deleteEntry for an unfiled file never touches the same name in a folder
+ok 4 - deleteEntry for an unfiled file never touches the same name in a folder
+  ---
+  duration_ms: 2.448166
+  type: 'test'
+  ...
+# Subtest: a list cut at 400 is reported as truncated
+ok 5 - a list cut at 400 is reported as truncated
+  ---
+  duration_ms: 8.234916
+  type: 'test'
+  ...
+# Subtest: old files without a title fall back to pretty(slug)
+ok 6 - old files without a title fall back to pretty(slug)
+  ---
+  duration_ms: 0.87525
+  type: 'test'
+  ...
+# Subtest: the panel renders titles exactly, the Duplicate action and the truncation notice
+ok 7 - the panel renders titles exactly, the Duplicate action and the truncation notice
+  ---
+  duration_ms: 34.774333
+  type: 'test'
+  ...
+# Subtest: ?selftest=1 diagnostics are all ok and JSON-serialisable
+ok 8 - ?selftest=1 diagnostics are all ok and JSON-serialisable
+  ---
+  duration_ms: 0.715291
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 321.868208

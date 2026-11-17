@@ -4,9 +4,18 @@ import type { DEdge, Diagram, DNode, Page, ShapeKind, Side } from '../types';
 export interface DrawioFile {
   kind: 'drawio';
   version: 1;
-  name: string;
+  name: string; // slug: the storage key
+  /** What people see, exactly as typed (capitals, punctuation). Missing in files saved before titles. */
+  title?: string;
   xml: string;
   updatedAt: string;
+}
+
+export const TITLE_MAX = 120;
+
+/** A display title: any text, trimmed, at most 120 characters (code points, so emoji never split). */
+export function clampTitle(input: string): string {
+  return Array.from(input.trim()).slice(0, TITLE_MAX).join('').trim();
 }
 
 export function slugify(input: string, fallback = 'untitled'): string {
@@ -33,8 +42,8 @@ export function blankXml(page = 'Page-1'): string {
   );
 }
 
-export function makeFile(name: string, xml: string): DrawioFile {
-  return { kind: 'drawio', version: 1, name, xml, updatedAt: new Date().toISOString() };
+export function makeFile(name: string, xml: string, title = ''): DrawioFile {
+  return { kind: 'drawio', version: 1, name, title: clampTitle(title), xml, updatedAt: new Date().toISOString() };
 }
 
 /* ------------------------------------------------------------- legacy .pandadraw -> mxfile */

@@ -1,5 +1,7 @@
 import type { Diagram, Page } from '../types';
-import { legacyToXml, makeFile, slugify, toXml, type DrawioFile } from './drawioFile';
+import { clampTitle, legacyToXml, makeFile, slugify, toXml, type DrawioFile } from './drawioFile';
+
+export { clampTitle };
 
 /**
  * Saved-work store. Cloud files live in R2 behind the Worker at /api/draw/* (same origin, Cloudflare
@@ -10,7 +12,9 @@ export type Source = 'cloud' | 'browser';
 
 export interface Entry {
   id: string; // cloud: "<folder>/<slug>" or "<slug>" when unfiled; browser: "local:<pageId>"
-  name: string; // slug
+  name: string; // slug: the storage key
+  /** Display title as typed ("PR# 123 – QC Report"). "" for files saved before titles: use `titleOf`. */
+  title: string;
   folder: string; // folder slug, "" = no folder
   source: Source;
   key?: string; // newest R2 key for this slug
@@ -19,7 +23,10 @@ export interface Entry {
   versions: number;
 }
 
-type Snapshot = { key: string; size: number; uploaded: string; folder?: string };
+type Snapshot = { key: string; size: number; uploaded: string; folder?: string; title?: string };
+
+/** Set when the Worker cut the list: `shown` of `total` saved copies are listed. */
+export type Truncated = { shown: number; total: number } | null;
 
 const API = '/api/draw';
 const TOMBSTONES = 'pandadraw.drawio.tombstones';
@@ -29,10 +36,15 @@ const FOLDERS = 'pandadraw.folders';
 /** Entry id for a cloud file: names are unique across folders, the folder keeps two stray copies apart. */
 export const entryId = (name: string, folder: string) => (folder ? `${folder}/${name}` : name);
 
-/** "q4-roadmap" -> "Q4 roadmap". Storage keeps slugs; people see this. */
+/** "q4-roadmap" -> "Q4 roadmap". Fallback label for a slug with no stored title (old files, folders). */
 export function pretty(slug: string): string {
   const s = slug.replace(/-+/g, ' ').trim();
   return s ? s[0].toUpperCase() + s.slice(1) : slug;
+}
+
+/** What a person sees for a file: its stored title, else the prettified slug. */
+export function titleOf(e: { name: string; title?: string }): string {
+  return e.title || pretty(e.name);
 }
 
 /* ------------------------------------------------------------------------- empty folders */
@@ -148,6 +160,7 @@ function legacyLocal(): { entries: Entry[]; pages: Record<string, Page>; diagram
       .map<Entry>((p) => ({
         id: `local:${p.id}`,
         name: slugify(p.title || 'untitled'),
+        title: clampTitle(p.title || ''),
         folder: '',
         source: 'browser',
         size: JSON.stringify(diagrams[p.id]).length,
@@ -161,29 +174,36 @@ function legacyLocal(): { entries: Entry[]; pages: Record<string, Page>; diagram
 }
 
 /** All visible entries, newest first. Cloud errors are returned, browser entries still listed. */
-export async function listEntries(): Promise<{ entries: Entry[]; error: string | null }> {
+export async function listEntries(): Promise<{ entries: Entry[]; error: string | null; truncated: Truncated }> {
   const tomb = readTombstones();
   const alive = (e: Entry) => !tomb[e.id] || Date.parse(e.updated) > Date.parse(tomb[e.id]);
   let error: string | null = null;
+  let truncated: Truncated = null;
   const bySlug = new Map<string, Entry>();
   try {
     const r = await call(`${API}/backups`, { headers: { accept: 'application/json' } });
-    const j = await json<{ items: Snapshot[] }>(r);
+    const j = await json<{ items: Snapshot[]; count?: number }>(r);
+    const shown = j.items?.length ?? 0;
+    if (typeof j.count === 'number' && j.count > shown) truncated = { shown, total: j.count };
     for (const s of j.items ?? []) {
       const slug = slugFromKey(s.key);
       const folder = s.folder ?? '';
       const id = entryId(slug, folder);
       const prev = bySlug.get(id);
       if (!prev || Date.parse(s.uploaded) > Date.parse(prev.updated)) {
-        bySlug.set(id, { id, name: slug, folder, source: 'cloud', key: s.key, size: s.size, updated: s.uploaded, versions: (prev?.versions ?? 0) + 1 });
-      } else prev.versions += 1;
+        const title = clampTitle(s.title || '') || prev?.title || '';
+        bySlug.set(id, { id, name: slug, title, folder, source: 'cloud', key: s.key, size: s.size, updated: s.uploaded, versions: (prev?.versions ?? 0) + 1 });
+      } else {
+        prev.versions += 1;
+        if (!prev.title && s.title) prev.title = clampTitle(s.title); // newest copy predates titles
+      }
     }
   } catch (e) {
     error = e instanceof Error ? e.message : 'Could not reach the backup service.';
   }
   const local = legacyLocal().entries;
   const entries = [...bySlug.values(), ...local].filter(alive).sort((a, b) => Date.parse(b.updated) - Date.parse(a.updated));
-  return { entries, error };
+  return { entries, error, truncated };
 }
 
 /** Fetch an entry and return the draw.io XML (drawio payload, legacy pandadraw or raw XML). */
@@ -231,11 +251,12 @@ function backupQuery(name: string, folder: string): string {
 }
 
 /**
- * Delete the cloud copy of a diagram, every saved version of it. With a folder only that folder's copy
- * goes; without one (unfiled) the Worker deletes that name in every folder.
+ * Delete the cloud copy of a diagram, every saved version of it, in that folder only. The folder
+ * param is always sent: `folder=` (empty) means "unfiled copies only". Without it the Worker deletes
+ * the name in every folder, which a rename or move must never do.
  */
-export async function deleteEntry(name: string, folder = ''): Promise<{ deleted: number }> {
-  const r = await call(`${API}/backup?${backupQuery(name, folder)}`, {
+export async function deleteEntry(name: string, folder: string): Promise<{ deleted: number }> {
+  const r = await call(`${API}/backup?name=${encodeURIComponent(name)}&folder=${encodeURIComponent(folder)}`, {
     method: 'DELETE',
     headers: { accept: 'application/json' },
   });
@@ -244,11 +265,16 @@ export async function deleteEntry(name: string, folder = ''): Promise<{ deleted:
   return { deleted: j.deleted ?? 0 };
 }
 
-/** PUT /api/draw/backup?name=<slug>[&folder=<slug>] with the drawio payload. `keepalive` for page-hide flushes. */
-export async function saveXml(name: string, folder: string, xml: string, keepalive = false): Promise<SaveResult> {
-  const file: DrawioFile = makeFile(name, xml);
+/**
+ * PUT /api/draw/backup?name=<slug>[&folder=<slug>]&title=<title> with the drawio payload. The title
+ * travels both in the payload and as a query param (the Worker keeps it in R2 metadata for the list).
+ * `keepalive` for page-hide flushes.
+ */
+export async function saveXml(name: string, folder: string, xml: string, title: string, keepalive = false): Promise<SaveResult> {
+  const file: DrawioFile = makeFile(name, xml, title);
   const body = JSON.stringify(file);
-  const r = await call(`${API}/backup?${backupQuery(name, folder)}`, {
+  const t = file.title ? `&title=${encodeURIComponent(file.title)}` : '';
+  const r = await call(`${API}/backup?${backupQuery(name, folder)}${t}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body,
