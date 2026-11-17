@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
 import { SavedWorkPanel, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
-import { probeDrawio, type DrawioLink } from './lib/drawioProtocol';
+import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
 import { downloadText } from './lib/download';
 import { listEntries, readXml, saveXml, tombstone, uniqueSlug, type Entry, type Source } from './lib/savedWork';
 
@@ -77,34 +77,67 @@ export function App() {
 
   /* ---------------------------------------------------------------------- saving */
 
-  /** Every save goes through PUT /api/draw/backup. Serialised so two PUTs never race. */
-  const flush = useCallback((keepalive = false): Promise<void> => {
-    window.clearTimeout(timer.current);
-    chain.current = chain.current.then(async () => {
+  /** Every PUT runs on `chain`, one at a time, so two PUTs never race. Jobs must not reject. */
+  const enqueue = useCallback(<T,>(job: () => Promise<T>): Promise<T> => {
+    const run = chain.current.then(job);
+    chain.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }, []);
+
+  /**
+   * Save the open file's latest XML through PUT /api/draw/backup. The file and XML are captured when
+   * the save is queued, not when it runs, so switching files never drops the previous file's edits.
+   * Resolves true when that XML is stored (or nothing needed saving); never rejects.
+   */
+  const flush = useCallback(
+    (keepalive = false): Promise<boolean> => {
+      window.clearTimeout(timer.current);
       const o = openRef.current;
       const xml = latestXml.current;
-      if (!o || !xml || xml === savedXml.current) return;
-      setSave({ state: 'saving' });
-      try {
-        const res = await saveXml(o.name, xml, keepalive);
-        savedXml.current = xml;
-        const prev = entriesRef.current.find((x) => x.id === o.name);
-        if (o.source === 'browser') {
-          tombstone(o.id); // the browser-only copy now lives in R2
-          setOpen({ ...o, id: o.name, source: 'cloud' });
+      if (!o || !xml || xml === savedXml.current) return enqueue(async () => true);
+      return enqueue(async () => {
+        const isOpen = () => openRef.current?.token === o.token;
+        if (isOpen() && xml === savedXml.current) return true; // an earlier queued save stored it
+        // Same token = same file, possibly renamed or promoted from browser to cloud since queueing.
+        const cur = isOpen() ? openRef.current! : o;
+        if (isOpen()) setSave({ state: 'saving' });
+        try {
+          const res = await saveXml(cur.name, xml, keepalive);
+          const stillListed = isOpen() || entriesRef.current.some((x) => x.id === cur.id);
+          if (!stillListed) {
+            tombstone(cur.name); // deleted while this save was in flight: keep it hidden
+            return true;
+          }
+          if (cur.source === 'browser') tombstone(cur.id); // the browser-only copy now lives in R2
+          const prev = entriesRef.current.find((x) => x.id === cur.name);
+          upsert(
+            { id: cur.name, name: cur.name, source: 'cloud', key: res.key ?? prev?.key, size: res.bytes, updated: res.updatedAt, versions: (prev?.versions ?? 0) + 1 },
+            cur.source === 'browser' ? cur.id : undefined,
+          );
+          if (!res.key) void refresh(); // Worker did not echo the key: re-list so Open fetches the newest copy
+          if (isOpen()) {
+            savedXml.current = xml;
+            if (cur.source === 'browser') setOpen({ ...cur, id: cur.name, source: 'cloud' });
+            setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
+          }
+          return true;
+        } catch (e) {
+          if (isOpen()) {
+            fail('Save failed (changes are still in the editor)', e);
+          } else if (entriesRef.current.some((x) => x.id === cur.id)) {
+            // The editor has moved on: this XML exists nowhere else. Hand it to the user.
+            downloadText(xml, `${cur.name}.unsaved.drawio`, 'application/xml');
+            fail(`Could not save ${cur.name}; its last changes were offered as a download (${cur.name}.unsaved.drawio)`, e);
+          }
+          return false;
         }
-        upsert(
-          { id: o.name, name: o.name, source: 'cloud', key: res.key ?? prev?.key, size: res.bytes, updated: res.updatedAt, versions: (prev?.versions ?? 0) + 1 },
-          o.source === 'browser' ? o.id : undefined,
-        );
-        if (!res.key) void refresh(); // Worker did not echo the key: re-list so Open fetches the newest copy
-        setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
-      } catch (e) {
-        fail('Save failed', e);
-      }
-    });
-    return chain.current;
-  }, [refresh]);
+      });
+    },
+    [enqueue, refresh],
+  );
 
   const onChange = useCallback(
     (xml: string, immediate: boolean) => {
@@ -126,8 +159,19 @@ export function App() {
   /* ---------------------------------------------------------------------- file actions */
 
   const openEntry = async (e: Entry) => {
-    if (openRef.current?.id === e.id) return;
-    await flush();
+    const cur = openRef.current;
+    if (cur?.id === e.id) return;
+    const saved = await flush();
+    if (
+      !saved &&
+      cur &&
+      openRef.current?.token === cur.token &&
+      !window.confirm(
+        `"${cur.name}" has changes that could not be saved to the cloud.\n\nOpen "${e.name}" anyway and discard them?\n(Cancel keeps it open; ".drawio" downloads a copy.)`,
+      )
+    ) {
+      return;
+    }
     try {
       const xml = await readXml(e);
       const cloud = entriesRef.current.filter((x) => x.source === 'cloud').map((x) => x.id);
@@ -141,51 +185,61 @@ export function App() {
     }
   };
 
-  const newDiagram = async (want: string) => {
+  /** Returns the new file's id. */
+  const newDiagram = async (want: string): Promise<string> => {
+    // Queue the current file's last edits under its own name before switching (captured now).
+    void flush();
     // The editor opens first and unconditionally: the save queue must never gate it.
     const name = uniqueSlug(want, entriesRef.current.map((x) => x.id));
     const xml = blankXml();
+    const tok = ++token.current;
     latestXml.current = xml;
     savedXml.current = '';
     setSave({ state: 'saving' });
-    setOpen({ id: name, name, xml, token: ++token.current, source: 'cloud' });
-    try {
-      await flush();
-    } catch {
-      /* a stuck or failed save of the previous file must not block a new one */
-    }
-    try {
-      const res = await saveXml(name, xml);
-      savedXml.current = xml;
-      upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
-      if (!res.key) void refresh();
-      setSave({ state: 'saved', at: res.updatedAt });
-    } catch (err) {
-      fail('Could not save the new diagram to the cloud (it is open, unsaved)', err);
-    }
+    setOpen({ id: name, name, xml, token: tok, source: 'cloud' });
+    await enqueue(async () => {
+      const isOpen = () => openRef.current?.token === tok;
+      try {
+        const res = await saveXml(name, xml);
+        upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
+        if (!res.key) void refresh();
+        if (isOpen()) {
+          savedXml.current = xml;
+          setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
+        }
+      } catch (err) {
+        if (isOpen()) fail('Could not save the new diagram to the cloud (it is open, unsaved)', err);
+      }
+    });
+    return name;
   };
 
-  /** No rename route in the Worker: copy to the new slug, then tombstone the old one. */
-  const rename = async (e: Entry, want: string) => {
+  /** No rename route in the Worker: copy to the new slug, then tombstone the old one. Returns the new id. */
+  const rename = async (e: Entry, want: string): Promise<string | null> => {
     const name = uniqueSlug(want, entriesRef.current.filter((x) => x.id !== e.id).map((x) => x.id));
-    if (name === e.id) return;
-    const isOpen = openRef.current?.id === e.id;
-    try {
-      if (isOpen) await flush();
-      const xml = isOpen ? latestXml.current : await readXml(e);
-      const res = await saveXml(name, xml);
-      tombstone(e.id);
-      upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 }, e.id);
-      if (!res.key) void refresh();
+    if (name === e.id) return e.id;
+    if (openRef.current?.id === e.id) window.clearTimeout(timer.current); // pending edits go to the new name
+    return enqueue(async () => {
       const o = openRef.current;
-      if (isOpen && o) {
-        savedXml.current = xml;
-        setOpen({ ...o, id: name, name, source: 'cloud' });
+      const isOpen = o?.id === e.id;
+      try {
+        const xml = isOpen && latestXml.current ? latestXml.current : await readXml(e);
+        const res = await saveXml(name, xml);
+        tombstone(e.id);
+        upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 }, e.id);
+        if (!res.key) void refresh();
+        if (isOpen && o && openRef.current?.token === o.token) {
+          savedXml.current = xml;
+          setOpen({ ...openRef.current, id: name, name, source: 'cloud' });
+          setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
+          if (latestXml.current !== xml) void flush();
+        }
+        return name;
+      } catch (err) {
+        fail(`Rename failed`, err);
+        return null;
       }
-      setSave({ state: 'saved', at: res.updatedAt });
-    } catch (err) {
-      fail(`Rename failed`, err);
-    }
+    });
   };
 
   const remove = (e: Entry): boolean => {
@@ -195,6 +249,7 @@ export function App() {
     if (!ok) return false;
     tombstone(e.id);
     setEntries((list) => list.filter((x) => x.id !== e.id));
+    entriesRef.current = entriesRef.current.filter((x) => x.id !== e.id);
     if (openRef.current?.id === e.id) {
       window.clearTimeout(timer.current);
       latestXml.current = savedXml.current = '';
@@ -206,6 +261,10 @@ export function App() {
 
   /* ---------------------------------------------------------------------- print / download */
 
+  /**
+   * Print / PDF. The iframe canvas is never printed (it is hidden in print CSS and a cross-document
+   * canvas cannot be captured): the sheet prints an SVG that draw.io itself exports on request.
+   */
   const print = useCallback(async () => {
     let img: string | null = null;
     const link = linkRef.current;
@@ -258,7 +317,9 @@ export function App() {
           void flush();
           setOpen(null);
         }}
-        onTimeout={() => setMount({ status: 'missing', reason: 'draw.io sent no init message within 8 seconds' })}
+        onTimeout={() =>
+          setMount({ status: 'missing', reason: `the /drawio/ page loaded but draw.io sent no init message within ${INIT_TIMEOUT_MS / 1000} seconds` })
+        }
       />
     );
   } else {
@@ -298,6 +359,8 @@ export function App() {
         <h1>{open?.name ?? 'PandaPlan Draw'}</h1>
         {printImg ? (
           <img src={printImg} alt="" />
+        ) : open ? (
+          <p>The diagram could not be exported for printing. Print from inside the editor with File › Print.</p>
         ) : (
           <p>Nothing to print from here. Open a diagram, or print from inside the editor with File › Print.</p>
         )}

@@ -11,8 +11,10 @@ interface Props {
   activeId: string | null;
   save: SaveState;
   onOpen(e: Entry): void;
-  onNew(name: string): Promise<void>;
-  onRename(e: Entry, name: string): Promise<void>;
+  /** Resolves to the new file's id. */
+  onNew(name: string): Promise<string>;
+  /** Resolves to the file's id after the rename, or null when it failed (the app reports why). */
+  onRename(e: Entry, name: string): Promise<string | null>;
   onDelete(e: Entry): boolean;
   onRefresh(): void;
   onPrint(): void;
@@ -60,6 +62,7 @@ export function SavedWorkPanel(p: Props) {
   const [busy, setBusy] = useState(false);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const searchRef = useRef<HTMLInputElement>(null);
+  const newBtnRef = useRef<HTMLButtonElement>(null);
 
   const rows = useMemo<Row[]>(() => {
     const q = query.trim().toLowerCase();
@@ -103,7 +106,8 @@ export function SavedWorkPanel(p: Props) {
     if (!name || name === e.name) return focusRow(`f:${e.id}`);
     setBusy(true);
     try {
-      await p.onRename(e, name);
+      const id = await p.onRename(e, name);
+      focusRow(`f:${id ?? e.id}`);
     } finally {
       setBusy(false);
     }
@@ -112,13 +116,21 @@ export function SavedWorkPanel(p: Props) {
   const commitNew = async () => {
     const name = draft.trim();
     setCreating(false);
-    if (!name) return;
+    if (!name) return newBtnRef.current?.focus();
     setBusy(true);
     try {
-      await p.onNew(name);
+      focusRow(`f:${await p.onNew(name)}`);
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Delete, then keep keyboard focus in the tree on the neighbouring row. */
+  const deleteAt = (i: number, e: Entry) => {
+    if (!p.onDelete(e)) return;
+    const next = rows[i + 1] ?? rows[i - 1];
+    if (next) focusRow(rowId(next));
+    else searchRef.current?.focus();
   };
 
   const onTreeKey = (ev: KeyboardEvent<HTMLUListElement>) => {
@@ -174,7 +186,7 @@ export function SavedWorkPanel(p: Props) {
       case 'Backspace':
         if (row.kind === 'file') {
           ev.preventDefault();
-          if (p.onDelete(row.entry)) move(i + 1 < rows.length ? i + 1 : i - 1);
+          deleteAt(i, row.entry);
         }
         return;
     }
@@ -223,6 +235,7 @@ export function SavedWorkPanel(p: Props) {
 
       <div className="sw-actions">
         <button
+          ref={newBtnRef}
           type="button"
           className="btn primary sm"
           disabled={busy}
@@ -239,7 +252,7 @@ export function SavedWorkPanel(p: Props) {
         <button type="button" className="iconbtn" title="Rename (F2)" aria-label="Rename selected" disabled={!focusedFile || busy} onClick={() => focusedFile && startRename(focusedFile)}>
           <Pencil size={14} />
         </button>
-        <button type="button" className="iconbtn" title="Delete (Del)" aria-label="Delete selected" disabled={!focusedFile || busy} onClick={() => focusedFile && p.onDelete(focusedFile)}>
+        <button type="button" className="iconbtn" title="Delete (Del)" aria-label="Delete selected" disabled={!focusedFile || busy} onClick={() => focusedFile && deleteAt(current, focusedFile)}>
           <Trash2 size={14} />
         </button>
       </div>
@@ -258,7 +271,12 @@ export function SavedWorkPanel(p: Props) {
             placeholder="Diagram name, then Enter"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && setCreating(false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setCreating(false);
+                newBtnRef.current?.focus();
+              }
+            }}
             onBlur={() => setCreating(false)}
           />
         </form>

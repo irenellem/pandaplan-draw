@@ -6,7 +6,7 @@ interface Props {
   xml: string;
   onChange(xml: string, immediate: boolean): void;
   onExit(): void;
-  /** No `init` within INIT_TIMEOUT_MS. */
+  /** The /drawio/ page finished loading but sent no `init` within INIT_TIMEOUT_MS. */
   onTimeout(): void;
   linkRef: { current: DrawioLink | null };
 }
@@ -20,6 +20,7 @@ export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }
   useEffect(() => {
     const el = frame.current;
     if (!el) return;
+    let timer: number | undefined;
     const link = connectDrawio(el, {
       onInit: () => {
         window.clearTimeout(timer);
@@ -29,15 +30,25 @@ export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }
       onAutosave: (x) => latest.current.onChange(x, false),
       onSave: (x) => {
         latest.current.onChange(x, true);
-        link.send({ action: 'status', message: 'Saved', modified: false });
+        // Not "Saved": the PUT has not happened yet. The saved-work panel shows the real outcome.
+        link.send({ action: 'status', message: '', modified: false });
       },
       onExit: () => latest.current.onExit(),
     });
-    const timer = window.setTimeout(() => {
-      if (!link.ready) latest.current.onTimeout();
-    }, INIT_TIMEOUT_MS);
+    // The clock starts at the frame's `load` event, not at mount: a cold-cache download of the
+    // multi-MB draw.io bundle must not be mistaken for a missing editor. `init` may also arrive
+    // before `load` (draw.io starts before its last images finish), which `link.ready` covers.
+    const onLoad = () => {
+      window.clearTimeout(timer);
+      if (link.ready) return;
+      timer = window.setTimeout(() => {
+        if (!link.ready) latest.current.onTimeout();
+      }, INIT_TIMEOUT_MS);
+    };
+    el.addEventListener('load', onLoad);
     linkRef.current = link;
     return () => {
+      el.removeEventListener('load', onLoad);
       window.clearTimeout(timer);
       link.dispose();
       if (linkRef.current === link) linkRef.current = null;
@@ -47,11 +58,11 @@ export function DrawioEditor({ name, xml, onChange, onExit, onTimeout, linkRef }
   return <iframe ref={frame} className="sw-frame" src={DRAWIO_SRC} title={`draw.io editor: ${name}`} />;
 }
 
-/** Shown when /drawio/ is not mounted (404, SPA fallback, or no init within 8 s). */
+/** Shown when /drawio/ is missing (404, SPA fallback) or loaded but sent no init within 8 s of `load`. */
 export function EditorPlaceholder({ reason, onRetry }: { reason: string | null; onRetry(): void }) {
   return (
     <div className="sw-placeholder" role="status">
-      <h2>The draw.io editor is not mounted yet</h2>
+      <h2>The draw.io editor is not available</h2>
       <p>
         Expected the self-hosted drawio webapp at <code>{DRAWIO_PATH}</code> on this origin, loaded as
       </p>

@@ -4,9 +4,8 @@ import { readFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
-// Served by the static Pages project under /draw/ — every asset URL must carry that prefix.
+// Own hostname now (draw.pandaplan.work), served by nginx: assets sit at the root, draw.io at /drawio/.
 export default defineConfig({
-  // Own hostname now (draw.pandaplan.work) — assets sit at the root.
   base: '/',
   plugins: [tailwindcss()],
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
