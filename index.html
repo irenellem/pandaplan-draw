@@ -8,7 +8,18 @@
     <title>PandaPlan Draw</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Static shell: the saved-work panel is visible before JS runs; React replaces it on mount. -->
+    <div id="root">
+      <div class="sw-app" data-app="pandaplan-draw">
+        <aside class="sw-panel" id="saved-work" aria-label="Saved work">
+          <header class="sw-head"><h1>Saved work</h1></header>
+          <ul class="sw-tree" role="tree" aria-label="Saved diagrams">
+            <li class="sw-empty" role="none">Loading saved diagrams…</li>
+          </ul>
+        </aside>
+        <main class="sw-main" aria-label="Diagram editor"></main>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
