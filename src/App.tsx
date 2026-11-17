@@ -142,21 +142,27 @@ export function App() {
   };
 
   const newDiagram = async (want: string) => {
-    await flush();
+    // The editor opens first and unconditionally: the save queue must never gate it.
     const name = uniqueSlug(want, entriesRef.current.map((x) => x.id));
     const xml = blankXml();
+    latestXml.current = xml;
+    savedXml.current = '';
+    setSave({ state: 'saving' });
+    setOpen({ id: name, name, xml, token: ++token.current, source: 'cloud' });
     try {
-      setSave({ state: 'saving' });
+      await flush();
+    } catch {
+      /* a stuck or failed save of the previous file must not block a new one */
+    }
+    try {
       const res = await saveXml(name, xml);
+      savedXml.current = xml;
       upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
       if (!res.key) void refresh();
       setSave({ state: 'saved', at: res.updatedAt });
     } catch (err) {
       fail('Could not save the new diagram to the cloud (it is open, unsaved)', err);
     }
-    latestXml.current = xml;
-    savedXml.current = xml;
-    setOpen({ id: name, name, xml, token: ++token.current, source: 'cloud' });
   };
 
   /** No rename route in the Worker: copy to the new slug, then tombstone the old one. */
