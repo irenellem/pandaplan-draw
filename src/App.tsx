@@ -2,6 +2,7 @@ import { ChevronLeft, FilePlus2, Folder, Save } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
 import { MoveSelect, SavedWorkPanel, saveStatusText, when, type SaveState } from './components/SavedWorkPanel';
+import { flushQueued } from './lib/savedWork';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
 import { nextSlot, type Slot } from './lib/editorSlot';
@@ -128,6 +129,18 @@ export function App() {
     setLoading(false);
   }, []);
 
+  // Edits made with no connection go up as soon as the browser says it is back.
+  useEffect(() => {
+    const sync = () => {
+      void flushQueued().then((n) => {
+        if (n) void refresh();
+      });
+    };
+    window.addEventListener('online', sync);
+    sync();
+    return () => window.removeEventListener('online', sync);
+  }, [refresh]);
+
   const checkMount = useCallback(async () => {
     setMount({ status: 'probing', reason: null });
     const p = await probeDrawio();
@@ -230,6 +243,14 @@ export function App() {
         if (isOpen()) setSave({ state: 'saving' });
         try {
           const res = await saveXml(cur.name, cur.folder, xml, cur.title, keepalive);
+          if (res.queued) {
+            // No connection: the edit is on this device and will go up by itself. Say so, do not pretend it is saved.
+            if (isOpen()) {
+              savedXml.current = xml;
+              setSave({ state: 'queued', at: res.updatedAt });
+            }
+            return true;
+          }
           const id = entryId(cur.name, cur.folder);
           const stillListed = isOpen() || entriesRef.current.some((x) => x.id === cur.id);
           if (!stillListed) {

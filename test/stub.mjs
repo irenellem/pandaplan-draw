@@ -77,6 +77,12 @@ export async function handle(method, rawUrl, headers = {}, body, staticHandler =
     r.headers.forEach((v, k) => (h[k] = v));
     return { status: r.status, headers: h, body: Buffer.from(await r.arrayBuffer()) };
   }
+  // The test browser serves one origin for the whole run and swaps the fake editor between checks.
+  // A real service worker would cache that editor and mask the swap, so the harness never gets one:
+  // the worker's own rules are pinned by test/offline.test.mjs instead.
+  if (url.pathname === '/sw.js') {
+    return { status: 404, headers: { 'content-type': 'text/plain' }, body: 'no worker in the test harness' };
+  }
   if (url.pathname === '/drawio/' || url.pathname === '/drawio/index.html') {
     return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body: Buffer.from(FAKE_DRAWIO) };
   }

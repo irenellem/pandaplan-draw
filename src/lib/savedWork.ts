@@ -1,5 +1,6 @@
 import type { Diagram, Page } from '../types';
 import { clampTitle, legacyToXml, makeFile, slugify, toXml, type DrawioFile } from './drawioFile';
+import { drain, enqueue as queueSave, isOfflineError, readQueue } from './offlineQueue';
 
 export { clampTitle };
 
@@ -243,6 +244,10 @@ export interface SaveResult {
   key?: string;
   bytes: number;
   updatedAt: string;
+  /** Stored on this device only: the connection was down, so the cloud copy is still behind. */
+  queued?: boolean;
+  /** How many edits are waiting on this device, this one included. */
+  pending?: number;
 }
 
 /** `name=<slug>[&folder=<slug>]`. No folder param for unfiled: that is how the Worker reads it. */
@@ -274,12 +279,21 @@ export async function saveXml(name: string, folder: string, xml: string, title: 
   const file: DrawioFile = makeFile(name, xml, title);
   const body = JSON.stringify(file);
   const t = file.title ? `&title=${encodeURIComponent(file.title)}` : '';
-  const r = await call(`${API}/backup?${backupQuery(name, folder)}${t}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body,
-    keepalive: keepalive && body.length < 60_000,
-  });
+  const url = `${API}/backup?${backupQuery(name, folder)}${t}`;
+  let r: Response;
+  try {
+    r = await call(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body,
+      keepalive: keepalive && body.length < 60_000,
+    });
+  } catch (e) {
+    // No connection: the edit is not lost. It waits on this device and goes up when the network returns.
+    if (!isOfflineError(e)) throw e;
+    const pending = queueSave({ url, body, at: file.updatedAt }).length;
+    return { bytes: body.length, updatedAt: file.updatedAt, queued: true, pending };
+  }
   const j = await json<{ key?: string; bytes?: number }>(r);
   return { key: j.key, bytes: j.bytes ?? body.length, updatedAt: file.updatedAt };
 }
@@ -290,4 +304,17 @@ export function uniqueSlug(want: string, taken: Iterable<string>): string {
   const base = slugify(want);
   if (!set.has(base)) return base;
   for (let i = 2; ; i++) if (!set.has(`${base}-${i}`)) return `${base}-${i}`;
+}
+
+/**
+ * Replay edits that were made with no connection, oldest first. Called when the browser reports it is
+ * back online and once at start-up, so a queued save never sits there until the next reload.
+ */
+export async function flushQueued(): Promise<number> {
+  if (!readQueue().length) return 0;
+  const { sent } = await drain(async (q) => {
+    const r = await call(q.url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: q.body });
+    if (!r.ok) throw httpError(r, await r.text());
+  });
+  return sent;
 }

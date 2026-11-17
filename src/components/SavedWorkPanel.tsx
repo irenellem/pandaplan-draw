@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { pretty, titleOf, type Entry, type Truncated } from '../lib/savedWork';
 import type { ThemeChoice } from '../lib/theme';
 
-export type SaveState = { state: 'idle' | 'pending' | 'saving' | 'saved' | 'error'; at?: string; error?: string };
+export type SaveState = { state: 'idle' | 'pending' | 'saving' | 'saved' | 'queued' | 'error'; at?: string; error?: string };
 
 interface Props {
   entries: Entry[];
@@ -87,6 +87,8 @@ function size(b: number): string {
 
 /** The save line, shared by the folder footer and the phone top bar. */
 export function saveStatusText(s: SaveState): string {
+  if (s.state === 'queued')
+    return 'No connection - this copy is on this device and goes up by itself when the network returns.';
   return s.state === 'pending'
     ? 'Unsaved changes…'
     : s.state === 'saving'
