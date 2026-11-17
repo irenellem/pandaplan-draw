@@ -77,8 +77,54 @@
 .sw-src { word-break: break-all; font-size: 12px; }
 .sw-reason { color: var(--ink-3); font-size: 12px; }
 
-/* Phone-only top bar inside the editor area (see the narrow media query). */
-.sw-mobilebar { display: none; }
+/* File toolbar above the editor: name, Move to…, Save. The stage below holds draw.io. */
+.sw-filebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+.sw-stage { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; }
+.sw-back { display: none; flex: 0 0 auto; }
+.sw-filebar-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+.sw-filebar-name strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.sw-filebar-folder { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sw-filebar-none { color: var(--ink-3); }
+.sw-filebar-status { flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-filebar-status.err { color: var(--danger); white-space: normal; line-height: 1.2; max-height: 40px; }
+.sw-save { flex: 0 0 auto; min-width: 74px; }
+
+/* Theme button in the panel header. */
+.sw-head { gap: 6px; }
+.sw-head h1 { flex: 1 1 auto; }
+.sw-theme { flex: 0 0 auto; }
+
+/* Folders in the tree. */
+.sw-folder { padding: 6px 6px; font-weight: 600; cursor: pointer; }
+.sw-folder:hover { background: var(--panel-2); }
+.sw-folder > svg { flex: 0 0 auto; color: var(--ink-2); }
+.sw-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-tree li.selected:not(.active) { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+.sw-hint { padding: 4px 8px 8px 30px !important; font-size: 11.5px; color: var(--ink-3); }
+.sw-new-where { display: flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 11.5px; color: var(--ink-3); }
+
+/* "Move to…": a native select laid invisibly over a button, so phones get their own picker. */
+.sw-move { position: relative; cursor: pointer; }
+.sw-move select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; }
+.sw-move:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sw-move.disabled { opacity: 0.45; cursor: not-allowed; }
+.sw-move.disabled select { cursor: not-allowed; }
+.sw-row-move { margin-left: auto; flex: 0 0 auto; visibility: hidden; }
+.sw-file:hover .sw-row-move, .sw-file.active .sw-row-move, .sw-file.selected .sw-row-move, .sw-row-move:focus-within { visibility: visible; }
+@media (pointer: coarse) { .sw-row-move { visibility: visible; } }
 
 /* Phone (390px) and small tablets: one pane at a time. The folder fills the screen until a diagram
    is opened; then the editor fills it and the top bar leads back. */
@@ -89,27 +135,11 @@
   .sw-keys { display: none; }
   /* iOS zooms the whole page into any input under 16px and leaves it zoomed (sideways scrolling). */
   .sw-search input, .sw-new input, .sw-rename { font-size: 16px; }
-  .sw-file { padding-top: 9px; padding-bottom: 9px; }
-  .sw-mobilebar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 44px;
-    padding: 0 8px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--line);
-    z-index: 1;
-  }
-  .sw-mobilebar .btn { flex: 0 0 auto; }
-  .sw-mobilebar-name { flex: 0 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sw-mobilebar-status { flex: 1 1 0; min-width: 0; text-align: right; font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sw-mobilebar-status.err { color: var(--danger); white-space: normal; line-height: 1.2; max-height: 40px; }
-  .sw-app.has-open .sw-frame { top: 44px; height: auto; }
-  .sw-app.has-open .sw-empty-main, .sw-app.has-open .sw-placeholder { padding-top: 60px; }
+  .sw-file, .sw-folder { padding-top: 9px; padding-bottom: 9px; }
+  .sw-back { display: inline-flex; }
+  .sw-filebar { padding: 0 8px; }
+  .sw-filebar-folder, .sw-filebar-move { display: none; }
+  .sw-filebar-status:not(.err) { display: none; }
 }
 
 .spin { animation: sw-spin 0.9s linear infinite; }

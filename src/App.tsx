@@ -1,15 +1,29 @@
-import { ChevronLeft, FilePlus2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronLeft, FilePlus2, Folder, Save } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DrawioEditor, EditorPlaceholder } from './components/DrawioEditor';
-import { SavedWorkPanel, saveStatusText, type SaveState } from './components/SavedWorkPanel';
+import { MoveSelect, SavedWorkPanel, saveStatusText, when, type SaveState } from './components/SavedWorkPanel';
 import { blankXml } from './lib/drawioFile';
 import { INIT_TIMEOUT_MS, probeDrawio, type DrawioLink } from './lib/drawioProtocol';
 import { downloadText } from './lib/download';
-import { deleteEntry, listEntries, readXml, saveXml, tombstone, uniqueSlug, type Entry, type Source } from './lib/savedWork';
+import {
+  deleteEntry,
+  entryId,
+  listEntries,
+  localFolders,
+  pretty,
+  readXml,
+  saveXml,
+  setLocalFolders,
+  tombstone,
+  uniqueSlug,
+  type Entry,
+  type Source,
+} from './lib/savedWork';
+import { applyTheme, nextTheme, readTheme, storeTheme, type ThemeChoice } from './lib/theme';
 
 const AUTOSAVE_MS = 2000;
 
-type Open = { id: string; name: string; xml: string; token: number; source: Source };
+type Open = { id: string; name: string; folder: string; xml: string; token: number; source: Source };
 type Mount = { status: 'probing' | 'mounted' | 'missing'; reason: string | null };
 
 /** Workspace: saved-work folder on the left, draw.io full-bleed on the right. */
@@ -21,6 +35,8 @@ export function App() {
   const [mount, setMount] = useState<Mount>({ status: 'probing', reason: null });
   const [save, setSave] = useState<SaveState>({ state: 'idle' });
   const [printImg, setPrintImg] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemeChoice>(readTheme);
+  const [emptyFolders, setEmptyFolders] = useState<string[]>(localFolders);
 
   const openRef = useRef<Open | null>(null);
   const latestXml = useRef('');
@@ -61,16 +77,41 @@ export function App() {
     void checkMount();
   }, [refresh, checkMount]);
 
+  // Light / Dark are fixed; System follows the OS, live.
   useEffect(() => {
+    applyTheme(theme);
+    if (theme !== 'system') return;
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = () => (document.documentElement.dataset.theme = mq.matches ? 'dark' : 'light');
-    apply();
+    const apply = () => applyTheme('system');
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
-  }, []);
+  }, [theme]);
+
+  const cycleTheme = () =>
+    setTheme((t) => {
+      const n = nextTheme(t);
+      storeTheme(n);
+      return n;
+    });
+
+  /** Every folder: the ones holding a diagram (from the cloud list) plus empty ones made here. */
+  const folders = useMemo(() => {
+    const set = new Set(emptyFolders);
+    for (const e of entries) if (e.folder) set.add(e.folder);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [entries, emptyFolders]);
+  const foldersRef = useRef(folders);
+  foldersRef.current = folders;
+
+  const updateEmptyFolders = (f: (list: string[]) => string[]) =>
+    setEmptyFolders((list) => {
+      const next = f(list);
+      setLocalFolders(next);
+      return next;
+    });
 
   useEffect(() => {
-    document.title = open ? `${open.name} · PandaPlan Draw` : 'PandaPlan Draw';
+    document.title = open ? `${pretty(open.name)} · PandaPlan Draw` : 'PandaPlan Draw';
   }, [open]);
 
   const upsert = (e: Entry, removeId?: string) =>
@@ -106,22 +147,23 @@ export function App() {
         const cur = isOpen() ? openRef.current! : o;
         if (isOpen()) setSave({ state: 'saving' });
         try {
-          const res = await saveXml(cur.name, xml, keepalive);
+          const res = await saveXml(cur.name, cur.folder, xml, keepalive);
+          const id = entryId(cur.name, cur.folder);
           const stillListed = isOpen() || entriesRef.current.some((x) => x.id === cur.id);
           if (!stillListed) {
-            tombstone(cur.name); // deleted while this save was in flight: keep it hidden
+            tombstone(id); // deleted while this save was in flight: keep it hidden
             return true;
           }
           if (cur.source === 'browser') tombstone(cur.id); // the browser-only copy now lives in R2
-          const prev = entriesRef.current.find((x) => x.id === cur.name);
+          const prev = entriesRef.current.find((x) => x.id === id);
           upsert(
-            { id: cur.name, name: cur.name, source: 'cloud', key: res.key ?? prev?.key, size: res.bytes, updated: res.updatedAt, versions: (prev?.versions ?? 0) + 1 },
+            { id, name: cur.name, folder: cur.folder, source: 'cloud', key: res.key ?? prev?.key, size: res.bytes, updated: res.updatedAt, versions: (prev?.versions ?? 0) + 1 },
             cur.source === 'browser' ? cur.id : undefined,
           );
           if (!res.key) void refresh(); // Worker did not echo the key: re-list so Open fetches the newest copy
           if (isOpen()) {
             savedXml.current = xml;
-            if (cur.source === 'browser') setOpen({ ...cur, id: cur.name, source: 'cloud' });
+            if (cur.source === 'browser') setOpen({ ...cur, id, source: 'cloud' });
             setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
           }
           return true;
@@ -150,6 +192,26 @@ export function App() {
     },
     [flush],
   );
+
+  /**
+   * The Save button. Not a second save path: it skips the autosave wait and queues the same `flush`
+   * on the same chain, so it can never race or duplicate an autosave PUT.
+   */
+  const saveNow = useCallback(() => {
+    const o = openRef.current;
+    if (!o) return;
+    if (latestXml.current && latestXml.current !== savedXml.current) {
+      void flush();
+      return;
+    }
+    // Nothing new to store. If a save is already queued or running, its outcome will show; otherwise
+    // confirm when the cloud copy was last written.
+    setSave((s) => {
+      if (s.state === 'saving' || s.state === 'saved' || s.state === 'error') return s;
+      const e = entriesRef.current.find((x) => x.id === o.id);
+      return e && o.source === 'cloud' ? { state: 'saved', at: e.updated } : s;
+    });
+  }, [flush]);
 
   useEffect(() => {
     const onHide = () => void flush(true);
@@ -187,41 +249,43 @@ export function App() {
       cur &&
       openRef.current?.token === cur.token &&
       !window.confirm(
-        `"${cur.name}" has changes that could not be saved to the cloud.\n\nOpen "${e.name}" anyway and discard them?\n(Cancel keeps it open; the Download button saves a copy to this device.)`,
+        `"${pretty(cur.name)}" has changes that could not be saved to the cloud.\n\nOpen "${pretty(e.name)}" anyway and discard them?\n(Cancel keeps it open; the Download button saves a copy to this device.)`,
       )
     ) {
       return;
     }
     try {
       const xml = await readXml(e);
-      const cloud = entriesRef.current.filter((x) => x.source === 'cloud').map((x) => x.id);
+      const cloud = entriesRef.current.filter((x) => x.source === 'cloud').map((x) => x.name);
       const name = e.source === 'browser' ? uniqueSlug(e.name, cloud) : e.name;
       latestXml.current = xml;
       savedXml.current = xml;
-      setOpen({ id: e.id, name, xml, token: ++token.current, source: e.source });
+      setOpen({ id: e.id, name, folder: e.folder, xml, token: ++token.current, source: e.source });
       setSave({ state: 'idle' });
     } catch (err) {
-      fail(`Could not open ${e.name}`, err);
+      fail(`Could not open ${pretty(e.name)}`, err);
     }
   };
 
   /** Returns the new file's id. */
-  const newDiagram = async (want: string): Promise<string> => {
+  const newDiagram = async (want: string, folder = ''): Promise<string> => {
     // Queue the current file's last edits under its own name before switching (captured now).
     void flush();
     // The editor opens first and unconditionally: the save queue must never gate it.
-    const name = uniqueSlug(want, entriesRef.current.map((x) => x.id));
+    // Names stay unique across all folders, so a name alone never matches two files.
+    const name = uniqueSlug(want, entriesRef.current.map((x) => x.name));
+    const id = entryId(name, folder);
     const xml = blankXml();
     const tok = ++token.current;
     latestXml.current = xml;
     savedXml.current = '';
     setSave({ state: 'saving' });
-    setOpen({ id: name, name, xml, token: tok, source: 'cloud' });
+    setOpen({ id, name, folder, xml, token: tok, source: 'cloud' });
     await enqueue(async () => {
       const isOpen = () => openRef.current?.token === tok;
       try {
-        const res = await saveXml(name, xml);
-        upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
+        const res = await saveXml(name, folder, xml);
+        upsert({ id, name, folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 });
         if (!res.key) void refresh();
         if (isOpen()) {
           savedXml.current = xml;
@@ -231,37 +295,38 @@ export function App() {
         if (isOpen()) fail('Could not save the new diagram to the cloud (it is open, unsaved)', err);
       }
     });
-    return name;
+    return id;
   };
 
   /** No rename route in the Worker: copy to the new slug, then tombstone the old one. Returns the new id. */
   const rename = async (e: Entry, want: string): Promise<string | null> => {
-    const name = uniqueSlug(want, entriesRef.current.filter((x) => x.id !== e.id).map((x) => x.id));
-    if (name === e.id) return e.id;
+    const name = uniqueSlug(want, entriesRef.current.filter((x) => x.id !== e.id).map((x) => x.name));
+    if (name === e.name && e.source === 'cloud') return e.id;
+    const id = entryId(name, e.folder);
     if (openRef.current?.id === e.id) window.clearTimeout(timer.current); // pending edits go to the new name
     return enqueue(async () => {
       const o = openRef.current;
       const isOpen = o?.id === e.id;
       try {
         const xml = isOpen && latestXml.current ? latestXml.current : await readXml(e);
-        const res = await saveXml(name, xml);
+        const res = await saveXml(name, e.folder, xml);
         tombstone(e.id);
-        upsert({ id: name, name, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 }, e.id);
+        upsert({ id, name, folder: e.folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: 1 }, e.id);
         if (!res.key) void refresh();
         if (isOpen && o && openRef.current?.token === o.token) {
           savedXml.current = xml;
-          setOpen({ ...openRef.current, id: name, name, source: 'cloud' });
+          setOpen({ ...openRef.current, id, name, source: 'cloud' });
           setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
           if (latestXml.current !== xml) void flush();
         }
         // The tombstone only hides the old name in this browser; without this the phone and every
         // other device keep showing it, so one rename leaves two files.
         if (e.source === 'cloud') {
-          await deleteEntry(e.id).catch(() =>
-            fail(`Renamed to "${name}", but the old name "${e.name}" still shows on other devices. Delete it there`),
+          await deleteEntry(e.name, e.folder).catch(() =>
+            fail(`Renamed to "${pretty(name)}", but the old name "${pretty(e.name)}" still shows on other devices. Delete it there`),
           );
         }
-        return name;
+        return id;
       } catch (err) {
         fail(`Rename failed`, err);
         return null;
@@ -271,7 +336,7 @@ export function App() {
 
   const remove = (e: Entry): boolean => {
     const ok = window.confirm(
-      `Delete "${e.name}"?\n\nThis deletes every saved version of it from cloud storage. It cannot be undone.`,
+      `Delete "${pretty(e.name)}"?\n\nThis deletes every saved version of it from cloud storage. It cannot be undone.`,
     );
     if (!ok) return false;
     // Close it first: an open file keeps autosaving, and a save landing after the delete would
@@ -289,9 +354,127 @@ export function App() {
       // On the save queue: a save already in flight for this file lands first, so the delete removes
       // it too instead of the diagram reappearing on other devices.
       void enqueue(() =>
-        deleteEntry(e.id).then(
+        deleteEntry(e.name, e.folder).then(
           () => undefined,
-          (err) => fail(`"${e.name}" is hidden here, but the cloud copy could not be deleted`, err),
+          (err) => fail(`"${pretty(e.name)}" is hidden here, but the cloud copy could not be deleted`, err),
+        ),
+      );
+    }
+    return true;
+  };
+
+  /* ---------------------------------------------------------------------- folders */
+
+  /**
+   * Move one diagram to `folder` ("" = no folder). Runs INSIDE a queue job (callers enqueue), so no
+   * autosave PUT can interleave. No move route in the Worker: read, PUT to the new folder, DELETE the
+   * old copy. Returns the new id, or null when it failed (the reason is shown).
+   */
+  const relocate = async (e: Entry, folder: string): Promise<string | null> => {
+    if (e.folder === folder && e.source === 'cloud') return e.id;
+    const o = openRef.current;
+    const isOpen = !!o && o.id === e.id;
+    if (isOpen) window.clearTimeout(timer.current); // its pending edits go along to the new folder
+    // An old browser-only diagram gets a free cloud name, the same one Open gives it.
+    const cloudNames = entriesRef.current.filter((x) => x.source === 'cloud').map((x) => x.name);
+    const name = isOpen ? o.name : e.source === 'browser' ? uniqueSlug(e.name, cloudNames) : e.name;
+    const id = entryId(name, folder);
+    let reported = false;
+    let xml: string;
+    try {
+      xml = isOpen && latestXml.current ? latestXml.current : await readXml(e);
+    } catch (err) {
+      fail(`Could not move "${pretty(e.name)}"`, err);
+      return null;
+    }
+    try {
+      let res;
+      if (e.source === 'cloud' && !e.folder) {
+        // Unfiled copies have no folder to name in the DELETE, and a DELETE without one removes the name
+        // in every folder, the new copy too. So: delete first, then write; the XML is held here meanwhile.
+        await deleteEntry(e.name);
+        try {
+          res = await saveXml(name, folder, xml);
+        } catch (err) {
+          await saveXml(e.name, '', xml).catch(() => {
+            downloadText(xml, `${e.name}.drawio`, 'application/xml');
+            fail(`Could not move "${pretty(e.name)}" and could not put it back; it was offered as a download (${e.name}.drawio)`, err);
+            reported = true;
+          });
+          throw err;
+        }
+      } else {
+        res = await saveXml(name, folder, xml);
+        if (e.source === 'cloud') {
+          await deleteEntry(e.name, e.folder).catch(() =>
+            fail(`Moved "${pretty(e.name)}", but an old copy is still in its previous folder. Delete it there`),
+          );
+        }
+      }
+      tombstone(e.id);
+      const prev = entriesRef.current.find((x) => x.id === e.id);
+      const moved: Entry = { id, name, folder, source: 'cloud', key: res.key, size: res.bytes, updated: res.updatedAt, versions: prev?.versions ?? 1 };
+      upsert(moved, e.id);
+      entriesRef.current = [moved, ...entriesRef.current.filter((x) => x.id !== id && x.id !== e.id)];
+      if (!res.key) void refresh();
+      const now = openRef.current;
+      if (isOpen && o && now?.token === o.token) {
+        savedXml.current = xml;
+        setOpen({ ...now, id, name, folder, source: 'cloud' });
+        setSave({ state: latestXml.current === xml ? 'saved' : 'pending', at: res.updatedAt });
+        if (latestXml.current !== xml) void flush();
+      }
+      return id;
+    } catch (err) {
+      if (!reported) fail(`Could not move "${pretty(e.name)}"`, err);
+      return null;
+    }
+  };
+
+  const move = (e: Entry, folder: string): Promise<string | null> => enqueue(() => relocate(e, folder));
+
+  const newFolder = (want: string): string => {
+    const slug = uniqueSlug(want, foldersRef.current);
+    updateEmptyFolders((list) => [...list, slug]);
+    return slug;
+  };
+
+  const renameFolder = async (from: string, want: string): Promise<string | null> => {
+    const to = uniqueSlug(want, foldersRef.current.filter((f) => f !== from));
+    if (to === from) return from;
+    updateEmptyFolders((list) => [...list.filter((f) => f !== from), to]);
+    return enqueue(async () => {
+      let ok = true;
+      for (const e of entriesRef.current.filter((x) => x.folder === from)) {
+        if ((await relocate(e, to)) === null) ok = false;
+      }
+      return ok ? to : null;
+    });
+  };
+
+  const deleteFolder = (folder: string): boolean => {
+    const inside = entriesRef.current.filter((x) => x.folder === folder);
+    const n = inside.length;
+    const ok = window.confirm(
+      `Delete folder ${pretty(folder)} and the ${n} diagram${n === 1 ? '' : 's'} inside it? This cannot be undone.`,
+    );
+    if (!ok) return false;
+    if (openRef.current && openRef.current.folder === folder) {
+      window.clearTimeout(timer.current);
+      latestXml.current = savedXml.current = '';
+      setOpen(null);
+      setSave({ state: 'idle' });
+    }
+    const gone = new Set(inside.map((x) => x.id));
+    inside.forEach((x) => tombstone(x.id));
+    setEntries((list) => list.filter((x) => !gone.has(x.id)));
+    entriesRef.current = entriesRef.current.filter((x) => !gone.has(x.id));
+    updateEmptyFolders((list) => list.filter((f) => f !== folder));
+    for (const e of inside) {
+      void enqueue(() =>
+        deleteEntry(e.name, folder).then(
+          () => undefined,
+          (err) => fail(`"${pretty(e.name)}" is hidden here, but the cloud copy could not be deleted`, err),
         ),
       );
     }
@@ -382,22 +565,29 @@ export function App() {
           error={listError}
           activeId={open?.id ?? null}
           save={save}
+          folders={folders}
+          theme={theme}
+          onTheme={cycleTheme}
           onOpen={(e) => void openEntry(e)}
           onNew={newDiagram}
           onRename={rename}
           onDelete={remove}
+          onMove={move}
+          onNewFolder={newFolder}
+          onRenameFolder={renameFolder}
+          onDeleteFolder={deleteFolder}
           onRefresh={() => void refresh()}
           onPrint={() => void print()}
           onDownload={download}
         />
         <main className="sw-main" aria-label="Diagram editor">
-          {open && (
-            // Phone only (CSS): the folder is hidden while a diagram is open, so this is the way back
-            // to it and the only place the save line shows.
-            <div className="sw-mobilebar">
+          {/* The file toolbar. Desktop: always there (Save shows, disabled, with nothing open).
+              Phone: only with a diagram open, where it is also the way back to the folder. */}
+          <div className="sw-filebar">
+            {open && (
               <button
                 type="button"
-                className="btn sm"
+                className="btn sm sw-back"
                 onClick={() => {
                   void flush();
                   setOpen(null);
@@ -405,13 +595,52 @@ export function App() {
               >
                 <ChevronLeft size={14} /> Saved work
               </button>
-              <span className="sw-mobilebar-name">{open.name}</span>
-              <span className={`sw-mobilebar-status${save.state === 'error' ? ' err' : ''}`} role="status">
+            )}
+            <span className="sw-filebar-name">
+              {open ? (
+                <>
+                  {open.folder && (
+                    <span className="sw-filebar-folder">
+                      <Folder size={13} aria-hidden /> {pretty(open.folder)} /
+                    </span>
+                  )}
+                  <strong>{pretty(open.name)}</strong>
+                </>
+              ) : (
+                <span className="sw-filebar-none">No diagram open</span>
+              )}
+            </span>
+            {open && (save.state === 'pending' || save.state === 'error') && (
+              <span className={`sw-filebar-status${save.state === 'error' ? ' err' : ''}`} role="status">
                 {saveStatusText(save)}
               </span>
-            </div>
-          )}
-          {main}
+            )}
+            {open && (
+              <MoveSelect
+                className="sw-filebar-move"
+                folders={folders}
+                current={open.folder}
+                label="Move to…"
+                onPick={(f) => {
+                  const e = entriesRef.current.find((x) => x.id === open.id);
+                  if (e) void move(e, f);
+                  else fail('It has not finished saving yet. Wait for “Saved”, then move it');
+                }}
+              />
+            )}
+            <button
+              type="button"
+              className="btn primary sm sw-save"
+              disabled={!open || save.state === 'saving'}
+              onClick={saveNow}
+              title="Save now (Ctrl+S in the editor does the same). Changes also save by themselves."
+              aria-live="polite"
+            >
+              <Save size={14} aria-hidden />
+              {!open ? 'Save' : save.state === 'saving' ? 'Saving…' : save.state === 'saved' && save.at ? `Saved ${when(save.at)}` : 'Save'}
+            </button>
+          </div>
+          <div className="sw-stage">{main}</div>
         </main>
       </div>
       <section className="print-sheet" aria-hidden="true">

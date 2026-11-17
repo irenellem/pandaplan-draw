@@ -1,6 +1,26 @@
-import { ChevronDown, ChevronRight, FileText, Folder, Pencil, Plus, Printer, RefreshCw, Search, Trash2, Download } from 'lucide-react';
+import {
+  CalendarDays,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  FileText,
+  Folder,
+  FolderInput,
+  FolderOpen,
+  FolderPlus,
+  Moon,
+  Pencil,
+  Plus,
+  Printer,
+  RefreshCw,
+  Search,
+  Sun,
+  SunMoon,
+  Trash2,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import type { Entry } from '../lib/savedWork';
+import { pretty, type Entry } from '../lib/savedWork';
+import type { ThemeChoice } from '../lib/theme';
 
 export type SaveState = { state: 'idle' | 'pending' | 'saving' | 'saved' | 'error'; at?: string; error?: string };
 
@@ -10,12 +30,22 @@ interface Props {
   error: string | null;
   activeId: string | null;
   save: SaveState;
+  /** Folder slugs, sorted. */
+  folders: string[];
+  theme: ThemeChoice;
+  onTheme(): void;
   onOpen(e: Entry): void;
-  /** Resolves to the new file's id. */
-  onNew(name: string): Promise<string>;
+  /** Resolves to the new file's id. `folder` "" = no folder. */
+  onNew(name: string, folder?: string): Promise<string>;
   /** Resolves to the file's id after the rename, or null when it failed (the app reports why). */
   onRename(e: Entry, name: string): Promise<string | null>;
   onDelete(e: Entry): boolean;
+  /** Resolves to the file's new id, or null when it failed. `folder` "" = no folder. */
+  onMove(e: Entry, folder: string): Promise<string | null>;
+  /** Returns the new folder's slug. */
+  onNewFolder(name: string): string;
+  onRenameFolder(folder: string, name: string): Promise<string | null>;
+  onDeleteFolder(folder: string): boolean;
   onRefresh(): void;
   onPrint(): void;
   onDownload(): void;
@@ -36,10 +66,10 @@ function groupOf(iso: string, now = new Date()): GroupId {
   return 'earlier';
 }
 
-function when(iso: string): string {
+export function when(iso: string, timeOnly = false): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  const today = groupOf(iso) === 'today';
+  const today = timeOnly || groupOf(iso) === 'today';
   return today
     ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
     : d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
@@ -65,7 +95,66 @@ export function saveStatusText(s: SaveState): string {
 /** Phones have no double-click: a tap on a file opens it there. */
 const touch = () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
-type Row = { kind: 'group'; id: GroupId; label: string; count: number } | { kind: 'file'; entry: Entry };
+const NONE = ':none'; // "No folder" in the Move menu (a slug can never contain ':')
+
+const THEME_LABEL: Record<ThemeChoice, string> = { light: 'Light', dark: 'Dark', system: 'System' };
+const THEME_NEXT: Record<ThemeChoice, string> = { light: 'Dark', dark: 'System (follows this device)', system: 'Light' };
+
+/** "Move to…" menu: a native select (the phone's own picker) over a button-looking label. */
+export function MoveSelect(p: {
+  folders: string[];
+  current: string;
+  onPick(folder: string): void;
+  label?: string;
+  className?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label
+      className={`sw-move${p.label ? ' btn sm' : ' iconbtn'}${p.className ? ` ${p.className}` : ''}${p.disabled ? ' disabled' : ''}`}
+      title="Move to a folder"
+      onClick={(ev) => ev.stopPropagation()}
+      onDoubleClick={(ev) => ev.stopPropagation()}
+    >
+      <FolderInput size={14} aria-hidden />
+      {p.label && <span>{p.label}</span>}
+      <select
+        aria-label="Move to folder"
+        value=""
+        disabled={p.disabled}
+        onKeyDown={(ev) => ev.stopPropagation()}
+        onChange={(ev) => {
+          const v = ev.target.value;
+          if (v) p.onPick(v === NONE ? '' : v);
+        }}
+      >
+        <option value="" disabled>
+          Move to…
+        </option>
+        <option value={NONE} disabled={p.current === ''}>
+          No folder{p.current === '' ? ' (it is here)' : ''}
+        </option>
+        {p.folders.map((f) => (
+          <option key={f} value={f} disabled={f === p.current}>
+            {pretty(f)}
+            {f === p.current ? ' (it is here)' : ''}
+          </option>
+        ))}
+        {!p.folders.length && (
+          <option value="" disabled>
+            (No folders yet: press “New folder” first)
+          </option>
+        )}
+      </select>
+    </label>
+  );
+}
+
+type Row =
+  | { kind: 'folder'; folder: string; count: number }
+  | { kind: 'hint'; folder: string }
+  | { kind: 'group'; id: GroupId; label: string; count: number }
+  | { kind: 'file'; entry: Entry };
 
 /** Saved-work folder: a keyboard-driven tree of saved diagrams grouped by date. */
 export function SavedWorkPanel(p: Props) {
@@ -73,27 +162,43 @@ export function SavedWorkPanel(p: Props) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [focusId, setFocusId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<null | 'file' | 'folder'>(null);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const searchRef = useRef<HTMLInputElement>(null);
   const newBtnRef = useRef<HTMLButtonElement>(null);
+  const newFolderBtnRef = useRef<HTMLButtonElement>(null);
 
   const rows = useMemo<Row[]>(() => {
     const q = query.trim().toLowerCase();
-    const hits = p.entries.filter((e) => !q || e.name.toLowerCase().includes(q));
+    const match = (s: string) => s.toLowerCase().includes(q) || pretty(s).toLowerCase().includes(q);
+    const hits = p.entries.filter((e) => !q || match(e.name));
     const out: Row[] = [];
+    // Folders first, each with its own diagrams (newest first).
+    for (const f of p.folders) {
+      const all = p.entries.filter((e) => e.folder === f);
+      const items = q && match(f) ? all : hits.filter((e) => e.folder === f);
+      if (q && !items.length && !match(f)) continue;
+      out.push({ kind: 'folder', folder: f, count: all.length });
+      if (collapsed[`d:${f}`] && !q) continue;
+      items.forEach((entry) => out.push({ kind: 'file', entry }));
+      if (!all.length && !q) out.push({ kind: 'hint', folder: f });
+    }
+    // Then everything not in a folder, by date as before.
+    const loose = hits.filter((e) => !e.folder);
     for (const g of GROUPS) {
-      const items = hits.filter((e) => groupOf(e.updated) === g.id);
+      const items = loose.filter((e) => groupOf(e.updated) === g.id);
       if (!items.length) continue;
       out.push({ kind: 'group', id: g.id, label: g.label, count: items.length });
       if (!collapsed[g.id] || q) items.forEach((entry) => out.push({ kind: 'file', entry }));
     }
     return out;
-  }, [p.entries, query, collapsed]);
+  }, [p.entries, p.folders, query, collapsed]);
 
-  const rowId = (r: Row) => (r.kind === 'group' ? `g:${r.id}` : `f:${r.entry.id}`);
+  const rowId = (r: Row) =>
+    r.kind === 'group' ? `g:${r.id}` : r.kind === 'folder' ? `d:${r.folder}` : r.kind === 'hint' ? `h:${r.folder}` : `f:${r.entry.id}`;
+  const foldKey = (r: Row) => (r.kind === 'group' ? r.id : r.kind === 'folder' ? `d:${r.folder}` : null);
   const current = rows.findIndex((r) => rowId(r) === focusId);
   const tabStop = current >= 0 ? focusId : rows.length ? rowId(rows.find((r) => r.kind === 'file') ?? rows[0]) : null;
 
@@ -108,10 +213,11 @@ export function SavedWorkPanel(p: Props) {
   }, [p.activeId, focusId]);
 
   const renameDone = useRef(false);
-  const startRename = (e: Entry) => {
+  /** `id` is the row id: `f:<entry id>` or `d:<folder>`. */
+  const startRename = (id: string, current: string) => {
     renameDone.current = false;
-    setDraft(e.name);
-    setRenaming(e.id);
+    setDraft(pretty(current));
+    setRenaming(id);
   };
 
   const commitRename = async (e: Entry) => {
@@ -119,7 +225,7 @@ export function SavedWorkPanel(p: Props) {
     renameDone.current = true;
     const name = draft.trim();
     setRenaming(null);
-    if (!name || name === e.name) return focusRow(`f:${e.id}`);
+    if (!name || name === pretty(e.name)) return focusRow(`f:${e.id}`);
     setBusy(true);
     try {
       const id = await p.onRename(e, name);
@@ -129,34 +235,64 @@ export function SavedWorkPanel(p: Props) {
     }
   };
 
-  const commitNew = async () => {
+  const commitFolderRename = async (folder: string) => {
+    if (renameDone.current) return;
+    renameDone.current = true;
     const name = draft.trim();
-    setCreating(false);
-    if (!name) return newBtnRef.current?.focus();
+    setRenaming(null);
+    if (!name || name === pretty(folder)) return focusRow(`d:${folder}`);
     setBusy(true);
     try {
-      focusRow(`f:${await p.onNew(name)}`);
+      const f = await p.onRenameFolder(folder, name);
+      focusRow(`d:${f ?? folder}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const focusedRow = rows[rows.findIndex((r) => rowId(r) === focusId)];
+  /** New diagrams go into the selected folder (or the selected diagram's folder). */
+  const targetFolder =
+    focusedRow?.kind === 'folder' ? focusedRow.folder : focusedRow?.kind === 'file' ? focusedRow.entry.folder : '';
+
+  const commitNew = async () => {
+    const name = draft.trim();
+    const kind = creating;
+    setCreating(null);
+    if (!name) return (kind === 'folder' ? newFolderBtnRef : newBtnRef).current?.focus();
+    if (kind === 'folder') {
+      const f = p.onNewFolder(name);
+      setCollapsed((c) => ({ ...c, [`d:${f}`]: false }));
+      return focusRow(`d:${f}`);
+    }
+    setBusy(true);
+    try {
+      focusRow(`f:${await p.onNew(name, targetFolder)}`);
     } finally {
       setBusy(false);
     }
   };
 
   /** Delete, then keep keyboard focus in the tree on the neighbouring row. */
-  const deleteAt = (i: number, e: Entry) => {
-    if (!p.onDelete(e)) return;
+  const deleteAt = (i: number, row: Row) => {
+    if (row.kind === 'file' ? !p.onDelete(row.entry) : row.kind === 'folder' ? !p.onDeleteFolder(row.folder) : true) return;
     const next = rows[i + 1] ?? rows[i - 1];
     if (next) focusRow(rowId(next));
     else searchRef.current?.focus();
   };
 
   const onTreeKey = (ev: KeyboardEvent<HTMLUListElement>) => {
-    if (renaming || (ev.target as HTMLElement).tagName === 'INPUT') return;
+    if (renaming || /^(INPUT|SELECT)$/.test((ev.target as HTMLElement).tagName)) return;
     const i = Math.max(0, current);
     const row = rows[i];
     if (!row) return;
     const move = (n: number) => {
       ev.preventDefault();
-      const next = rows[Math.min(rows.length - 1, Math.max(0, n))];
+      // Hint rows ("Empty…") are text, not stops: step over them in the direction of travel.
+      const dir = n < i ? -1 : 1;
+      let j = Math.min(rows.length - 1, Math.max(0, n));
+      while (rows[j]?.kind === 'hint') j += dir;
+      const next = rows[j] ?? rows[i];
       if (next) focusRow(rowId(next));
     };
     switch (ev.key) {
@@ -172,37 +308,44 @@ export function SavedWorkPanel(p: Props) {
         return move(0);
       case 'End':
         return move(rows.length - 1);
-      case 'ArrowRight':
-        if (row.kind === 'group' && collapsed[row.id]) {
+      case 'ArrowRight': {
+        const k = foldKey(row);
+        if (k && collapsed[k]) {
           ev.preventDefault();
-          setCollapsed((c) => ({ ...c, [row.id]: false }));
-        } else if (row.kind === 'group') move(i + 1);
+          setCollapsed((c) => ({ ...c, [k]: false }));
+        } else if (k) move(i + 1);
         return;
-      case 'ArrowLeft':
-        if (row.kind === 'group') {
+      }
+      case 'ArrowLeft': {
+        const k = foldKey(row);
+        if (k) {
           ev.preventDefault();
-          setCollapsed((c) => ({ ...c, [row.id]: true }));
+          setCollapsed((c) => ({ ...c, [k]: true }));
         } else {
-          for (let j = i; j >= 0; j--) if (rows[j].kind === 'group') return move(j);
+          for (let j = i; j >= 0; j--) if (foldKey(rows[j])) return move(j);
         }
         return;
+      }
       case 'Enter':
-      case ' ':
+      case ' ': {
         ev.preventDefault();
-        if (row.kind === 'group') setCollapsed((c) => ({ ...c, [row.id]: !c[row.id] }));
-        else p.onOpen(row.entry);
+        const k = foldKey(row);
+        if (k) setCollapsed((c) => ({ ...c, [k]: !c[k] }));
+        else if (row.kind === 'file') p.onOpen(row.entry);
         return;
+      }
       case 'F2':
-        if (row.kind === 'file') {
+        if (row.kind === 'file' || row.kind === 'folder') {
           ev.preventDefault();
-          startRename(row.entry);
+          if (row.kind === 'file') startRename(rowId(row), row.entry.name);
+          else startRename(rowId(row), row.folder);
         }
         return;
       case 'Delete':
       case 'Backspace':
-        if (row.kind === 'file') {
+        if (row.kind === 'file' || row.kind === 'folder') {
           ev.preventDefault();
-          deleteAt(i, row.entry);
+          deleteAt(i, row);
         }
         return;
     }
@@ -210,12 +353,34 @@ export function SavedWorkPanel(p: Props) {
 
   const status = saveStatusText(p.save);
 
-  const focusedFile = rows[current]?.kind === 'file' ? (rows[current] as { entry: Entry }).entry : null;
+  const focusedFile = focusedRow?.kind === 'file' ? focusedRow.entry : null;
+  const focusedFolder = focusedRow?.kind === 'folder' ? focusedRow.folder : null;
+  const ThemeIcon = p.theme === 'light' ? Sun : p.theme === 'dark' ? Moon : SunMoon;
+
+  const moveTo = async (e: Entry, folder: string) => {
+    setBusy(true);
+    try {
+      const id = await p.onMove(e, folder);
+      if (folder) setCollapsed((c) => ({ ...c, [`d:${folder}`]: false }));
+      focusRow(`f:${id ?? e.id}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <aside className="sw-panel" aria-label="Saved work">
       <header className="sw-head">
         <h1>Saved work</h1>
+        <button
+          type="button"
+          className="btn sm sw-theme"
+          onClick={p.onTheme}
+          title={`Light or dark screen. Now: ${THEME_LABEL[p.theme]}. Press for ${THEME_NEXT[p.theme]}.`}
+          aria-label={`Screen theme: ${THEME_LABEL[p.theme]}. Press to switch to ${THEME_NEXT[p.theme]}.`}
+        >
+          <ThemeIcon size={14} aria-hidden /> {THEME_LABEL[p.theme]}
+        </button>
         <button type="button" className="iconbtn plain" title="Refresh list" aria-label="Refresh list" onClick={p.onRefresh}>
           <RefreshCw size={14} className={p.loading ? 'spin' : undefined} />
         </button>
@@ -248,18 +413,50 @@ export function SavedWorkPanel(p: Props) {
           disabled={busy}
           onClick={() => {
             setDraft('');
-            setCreating(true);
+            setCreating('file');
           }}
         >
           <Plus size={14} /> New diagram
         </button>
+        <button
+          ref={newFolderBtnRef}
+          type="button"
+          className="btn sm"
+          disabled={busy}
+          onClick={() => {
+            setDraft('');
+            setCreating('folder');
+          }}
+        >
+          <FolderPlus size={14} /> New folder
+        </button>
         <button type="button" className="btn sm" disabled={!focusedFile || busy} onClick={() => focusedFile && p.onOpen(focusedFile)}>
           Open
         </button>
-        <button type="button" className="iconbtn" title="Rename (F2)" aria-label="Rename selected" disabled={!focusedFile || busy} onClick={() => focusedFile && startRename(focusedFile)}>
+        <MoveSelect
+          folders={p.folders}
+          current={focusedFile?.folder ?? ''}
+          disabled={!focusedFile || busy}
+          onPick={(f) => focusedFile && void moveTo(focusedFile, f)}
+        />
+        <button
+          type="button"
+          className="iconbtn"
+          title="Rename selected (F2)"
+          aria-label="Rename selected"
+          disabled={(!focusedFile && !focusedFolder) || busy}
+          onClick={() => focusedRow && (focusedFile ? startRename(rowId(focusedRow), focusedFile.name) : focusedFolder && startRename(rowId(focusedRow), focusedFolder))}
+        >
           <Pencil size={14} />
         </button>
-        <button type="button" className="iconbtn" title="Delete (Del)" aria-label="Delete selected" disabled={!focusedFile || busy} onClick={() => focusedFile && deleteAt(current, focusedFile)}>
+        <button
+          type="button"
+          className="iconbtn"
+          title="Delete selected (Del)"
+          aria-label="Delete selected"
+          disabled={(!focusedFile && !focusedFolder) || busy}
+          onClick={() => focusedRow && deleteAt(current, focusedRow)}
+        >
           <Trash2 size={14} />
         </button>
       </div>
@@ -274,18 +471,30 @@ export function SavedWorkPanel(p: Props) {
         >
           <input
             autoFocus
-            aria-label="New diagram name"
-            placeholder="Diagram name, then Enter"
+            aria-label={creating === 'folder' ? 'New folder name' : 'New diagram name'}
+            placeholder={creating === 'folder' ? 'Folder name, then Enter' : 'Diagram name, then Enter'}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
-                setCreating(false);
-                newBtnRef.current?.focus();
+                const kind = creating;
+                setCreating(null);
+                (kind === 'folder' ? newFolderBtnRef : newBtnRef).current?.focus();
               }
             }}
-            onBlur={() => setCreating(false)}
+            onBlur={() => setCreating(null)}
           />
+          {creating === 'file' && (
+            <small className="sw-new-where">
+              {targetFolder ? (
+                <>
+                  <FolderOpen size={12} aria-hidden /> Goes in folder {pretty(targetFolder)}
+                </>
+              ) : (
+                'Goes in no folder (select a folder first to put it there)'
+              )}
+            </small>
+          )}
         </form>
       )}
 
@@ -298,7 +507,7 @@ export function SavedWorkPanel(p: Props) {
       <ul className="sw-tree" role="tree" aria-label="Saved diagrams" onKeyDown={onTreeKey}>
         {!rows.length && (
           <li className="sw-empty" role="none">
-            {p.loading ? 'Loading saved diagrams…' : query ? 'No match.' : 'Nothing saved yet. Press “New diagram”.'}
+            {p.loading ? 'Loading saved diagrams…' : query ? 'No match.' : 'Nothing saved yet. Press “New diagram” or “New folder”.'}
           </li>
         )}
         {rows.map((r) => {
@@ -307,6 +516,62 @@ export function SavedWorkPanel(p: Props) {
             if (el) rowRefs.current.set(id, el);
             else rowRefs.current.delete(id);
           };
+          if (r.kind === 'hint') {
+            return (
+              <li key={id} role="none" className="sw-hint">
+                Empty. Select a diagram and use “Move to…”, or select this folder and press “New diagram”.
+              </li>
+            );
+          }
+          if (r.kind === 'folder') {
+            const open = !collapsed[id] || !!query.trim();
+            if (renaming === id) {
+              return (
+                <li key={id} ref={refCb} role="treeitem" aria-level={1} aria-expanded={open} tabIndex={-1} className="sw-folder">
+                  <Folder size={14} aria-hidden />
+                  <input
+                    className="sw-rename"
+                    autoFocus
+                    aria-label={`Rename folder ${pretty(r.folder)}`}
+                    value={draft}
+                    onChange={(ev) => setDraft(ev.target.value)}
+                    onKeyDown={(ev) => {
+                      ev.stopPropagation();
+                      if (ev.key === 'Enter') void commitFolderRename(r.folder);
+                      if (ev.key === 'Escape') {
+                        renameDone.current = true;
+                        setRenaming(null);
+                        focusRow(id);
+                      }
+                    }}
+                    onBlur={() => void commitFolderRename(r.folder)}
+                  />
+                </li>
+              );
+            }
+            return (
+              <li
+                key={id}
+                ref={refCb}
+                role="treeitem"
+                aria-level={1}
+                aria-expanded={open}
+                aria-selected={focusId === id}
+                tabIndex={tabStop === id ? 0 : -1}
+                className={`sw-folder${focusId === id ? ' selected' : ''}`}
+                onFocus={() => setFocusId(id)}
+                onClick={() => {
+                  setFocusId(id);
+                  setCollapsed((c) => ({ ...c, [id]: !c[id] }));
+                }}
+              >
+                {open ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
+                {open ? <FolderOpen size={14} aria-hidden /> : <Folder size={14} aria-hidden />}
+                <span className="sw-folder-name">{pretty(r.folder)}</span>
+                <span className="sw-count">{r.count}</span>
+              </li>
+            );
+          }
           if (r.kind === 'group') {
             const open = !collapsed[r.id] || !!query.trim();
             return (
@@ -322,7 +587,7 @@ export function SavedWorkPanel(p: Props) {
                 onClick={() => setCollapsed((c) => ({ ...c, [r.id]: !c[r.id] }))}
               >
                 {open ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
-                <Folder size={14} aria-hidden />
+                <CalendarDays size={14} aria-hidden />
                 <span>{r.label}</span>
                 <span className="sw-count">{r.count}</span>
               </li>
@@ -339,20 +604,20 @@ export function SavedWorkPanel(p: Props) {
               aria-selected={active}
               aria-current={active ? 'true' : undefined}
               tabIndex={tabStop === id ? 0 : -1}
-              className={`sw-file${active ? ' active' : ''}`}
+              className={`sw-file${active ? ' active' : ''}${focusId === id ? ' selected' : ''}`}
               onFocus={() => setFocusId(id)}
               onClick={() => {
                 setFocusId(id);
-                if (touch() && renaming !== e.id) p.onOpen(e);
+                if (touch() && renaming !== id) p.onOpen(e);
               }}
               onDoubleClick={() => p.onOpen(e)}
             >
               <FileText size={14} aria-hidden />
-              {renaming === e.id ? (
+              {renaming === id ? (
                 <input
                   className="sw-rename"
                   autoFocus
-                  aria-label={`Rename ${e.name}`}
+                  aria-label={`Rename ${pretty(e.name)}`}
                   value={draft}
                   onChange={(ev) => setDraft(ev.target.value)}
                   onKeyDown={(ev) => {
@@ -367,13 +632,16 @@ export function SavedWorkPanel(p: Props) {
                   onBlur={() => void commitRename(e)}
                 />
               ) : (
-                <span className="sw-name">
-                  <strong>{e.name}</strong>
-                  <small>
-                    {when(e.updated)} · {size(e.size)}
-                    {e.source === 'browser' ? ' · this browser' : e.versions > 1 ? ` · ${e.versions} versions` : ''}
-                  </small>
-                </span>
+                <>
+                  <span className="sw-name">
+                    <strong>{pretty(e.name)}</strong>
+                    <small>
+                      {when(e.updated)} · {size(e.size)}
+                      {e.source === 'browser' ? ' · this browser' : e.versions > 1 ? ` · ${e.versions} versions` : ''}
+                    </small>
+                  </span>
+                  <MoveSelect className="sw-row-move" folders={p.folders} current={e.folder} disabled={busy} onPick={(f) => void moveTo(e, f)} />
+                </>
               )}
             </li>
           );
@@ -392,7 +660,7 @@ export function SavedWorkPanel(p: Props) {
             <Download size={14} /> Download
           </button>
         </div>
-        <p className="sw-keys">↑↓ move · Enter open · F2 rename · Del delete · ←→ fold</p>
+        <p className="sw-keys">↑↓ select · Enter open · F2 rename · Del delete · ←→ fold</p>
       </footer>
     </aside>
   );

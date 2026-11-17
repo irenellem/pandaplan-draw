@@ -9,8 +9,9 @@ import { legacyToXml, makeFile, slugify, toXml, type DrawioFile } from './drawio
 export type Source = 'cloud' | 'browser';
 
 export interface Entry {
-  id: string; // cloud: slug; browser: "local:<pageId>"
-  name: string;
+  id: string; // cloud: "<folder>/<slug>" or "<slug>" when unfiled; browser: "local:<pageId>"
+  name: string; // slug
+  folder: string; // folder slug, "" = no folder
   source: Source;
   key?: string; // newest R2 key for this slug
   size: number;
@@ -18,11 +19,44 @@ export interface Entry {
   versions: number;
 }
 
-type Snapshot = { key: string; size: number; uploaded: string };
+type Snapshot = { key: string; size: number; uploaded: string; folder?: string };
 
 const API = '/api/draw';
 const TOMBSTONES = 'pandadraw.drawio.tombstones';
 const LEGACY_KEY = 'pandadraw.v1';
+const FOLDERS = 'pandadraw.folders';
+
+/** Entry id for a cloud file: names are unique across folders, the folder keeps two stray copies apart. */
+export const entryId = (name: string, folder: string) => (folder ? `${folder}/${name}` : name);
+
+/** "q4-roadmap" -> "Q4 roadmap". Storage keeps slugs; people see this. */
+export function pretty(slug: string): string {
+  const s = slug.replace(/-+/g, ' ').trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : slug;
+}
+
+/* ------------------------------------------------------------------------- empty folders */
+
+/**
+ * R2 has no folder objects: a folder exists once a diagram is saved in it. A folder made here stays in
+ * this browser's list until then, so "New folder" shows up at once and survives a reload.
+ */
+export function localFolders(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(FOLDERS) || '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setLocalFolders(list: string[]): void {
+  try {
+    localStorage.setItem(FOLDERS, JSON.stringify([...new Set(list)]));
+  } catch {
+    /* storage full: the folder still shows until reload */
+  }
+}
 
 /** "2026-11-17/my-plan.drawio.json" -> "my-plan". */
 export function slugFromKey(key: string): string {
@@ -114,6 +148,7 @@ function legacyLocal(): { entries: Entry[]; pages: Record<string, Page>; diagram
       .map<Entry>((p) => ({
         id: `local:${p.id}`,
         name: slugify(p.title || 'untitled'),
+        folder: '',
         source: 'browser',
         size: JSON.stringify(diagrams[p.id]).length,
         updated: new Date(diagrams[p.id].updatedAt || p.updatedAt || 0).toISOString(),
@@ -136,9 +171,11 @@ export async function listEntries(): Promise<{ entries: Entry[]; error: string |
     const j = await json<{ items: Snapshot[] }>(r);
     for (const s of j.items ?? []) {
       const slug = slugFromKey(s.key);
-      const prev = bySlug.get(slug);
+      const folder = s.folder ?? '';
+      const id = entryId(slug, folder);
+      const prev = bySlug.get(id);
       if (!prev || Date.parse(s.uploaded) > Date.parse(prev.updated)) {
-        bySlug.set(slug, { id: slug, name: slug, source: 'cloud', key: s.key, size: s.size, updated: s.uploaded, versions: (prev?.versions ?? 0) + 1 });
+        bySlug.set(id, { id, name: slug, folder, source: 'cloud', key: s.key, size: s.size, updated: s.uploaded, versions: (prev?.versions ?? 0) + 1 });
       } else prev.versions += 1;
     }
   } catch (e) {
@@ -157,8 +194,11 @@ export async function readXml(e: Entry): Promise<string> {
     if (!pages[pid] || !diagrams[pid]) throw new Error('This browser no longer has that diagram.');
     return legacyToXml([pages[pid]], [diagrams[pid]]);
   }
-  if (!e.key) throw new Error('It has not finished saving yet. Press Refresh and try again.');
-  const r = await call(`${API}/backup?key=${encodeURIComponent(e.key)}`, { headers: { accept: 'application/json' } });
+  // Filed copies by name + folder (the Worker's folder contract). Unfiled ones by their exact key:
+  // `?name=` without a folder means "newest in any folder", which could pick a different copy.
+  const q = e.folder ? backupQuery(e.name, e.folder) : e.key ? `key=${encodeURIComponent(e.key)}` : null;
+  if (!q) throw new Error('It has not finished saving yet. Press Refresh and try again.');
+  const r = await call(`${API}/backup?${q}`, { headers: { accept: 'application/json' } });
   const text = await r.text();
   if (r.status === 404) throw new Error('It is no longer in cloud storage. Press Refresh to update the list.');
   // An expired Access session answers 200 with a login page: never hand that to draw.io as a diagram
@@ -185,9 +225,17 @@ export interface SaveResult {
   updatedAt: string;
 }
 
-/** Delete the cloud copy of a diagram. Removes every saved version of that slug, not just today's. */
-export async function deleteEntry(name: string): Promise<{ deleted: number }> {
-  const r = await call(`${API}/backup?name=${encodeURIComponent(name)}`, {
+/** `name=<slug>[&folder=<slug>]`. No folder param for unfiled: that is how the Worker reads it. */
+function backupQuery(name: string, folder: string): string {
+  return `name=${encodeURIComponent(name)}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}`;
+}
+
+/**
+ * Delete the cloud copy of a diagram, every saved version of it. With a folder only that folder's copy
+ * goes; without one (unfiled) the Worker deletes that name in every folder.
+ */
+export async function deleteEntry(name: string, folder = ''): Promise<{ deleted: number }> {
+  const r = await call(`${API}/backup?${backupQuery(name, folder)}`, {
     method: 'DELETE',
     headers: { accept: 'application/json' },
   });
@@ -196,11 +244,11 @@ export async function deleteEntry(name: string): Promise<{ deleted: number }> {
   return { deleted: j.deleted ?? 0 };
 }
 
-/** PUT /api/draw/backup?name=<slug> with the drawio payload. `keepalive` for page-hide flushes. */
-export async function saveXml(name: string, xml: string, keepalive = false): Promise<SaveResult> {
+/** PUT /api/draw/backup?name=<slug>[&folder=<slug>] with the drawio payload. `keepalive` for page-hide flushes. */
+export async function saveXml(name: string, folder: string, xml: string, keepalive = false): Promise<SaveResult> {
   const file: DrawioFile = makeFile(name, xml);
   const body = JSON.stringify(file);
-  const r = await call(`${API}/backup?name=${encodeURIComponent(name)}`, {
+  const r = await call(`${API}/backup?${backupQuery(name, folder)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body,
