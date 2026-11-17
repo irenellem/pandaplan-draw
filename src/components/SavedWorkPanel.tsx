@@ -98,9 +98,6 @@ export function saveStatusText(s: SaveState): string {
           : '';
 }
 
-/** Phones have no double-click: a tap on a file opens it there. */
-const touch = () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
-
 const NONE = ':none'; // "No folder" in the Move menu (a slug can never contain ':')
 
 const THEME_LABEL: Record<ThemeChoice, string> = { light: 'Light', dark: 'Dark', system: 'System' };
@@ -652,7 +649,8 @@ export function SavedWorkPanel(p: Props) {
               onFocus={() => setFocusId(id)}
               onClick={() => {
                 setFocusId(id);
-                if (touch() && renaming !== id) p.onOpen(e);
+                // One click opens, as in Docmost. The row still focuses, so F2 / Delete / Ctrl+D work.
+                if (renaming !== id) p.onOpen(e);
               }}
               onDoubleClick={() => p.onOpen(e)}
             >
